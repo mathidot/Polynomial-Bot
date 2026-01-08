@@ -1,21 +1,25 @@
-use crate::common::{ MARKET_URL, Outcome, SLUG_URL, SPORT_URL, Market };
-use crate::bot_error::TokenError;
+use crate::common::{
+    CRYPTO_PATTERNS,
+    EVENT_URL,
+    MARKET_URL,
+    Market,
+    Result,
+    SLUG_URL,
+    SPORT_URL,
+    Token,
+    TokenType,
+};
 use chrono::Datelike;
-use polyfill_rs::decode::deserializers;
-use polyfill_rs::math::spread_pct;
-use polyfill_rs::{ ClobClient, PolyfillClient };
+use polyfill_rs::{ ClobClient };
 use tokio::task::JoinSet;
 use std::{ collections::HashSet, sync::Arc };
 use std::collections::HashMap;
 use serde_json::Value;
-use crate::common::{ EVENT_URL, Result };
-use crate::common::CRYPTO_PATTERNS;
 use polyfill_rs::PolyfillError;
-use crate::context::BotContext;
 use std::result::Result::Ok;
 use anyhow::{ anyhow };
 use futures::future;
-use polyfill_rs::types::{ Token };
+use tokio::sync::{ mpsc, Mutex };
 
 trait TokenApi {
     async fn get_events_by_params(&self, params: HashMap<String, String>) -> Result<Value>;
@@ -123,40 +127,129 @@ impl TokenApi for ClobClient {
     }
 }
 
-pub struct TokenFetcher {
+pub struct DataEngine {
     client: Arc<ClobClient>,
-    tokens: HashSet<String>,
+    subscribe_tokens: Arc<Mutex<HashSet<String>>>,
+    subscribe_tx: mpsc::UnboundedSender<Token>,
+    subscribe_rx: mpsc::UnboundedReceiver<Token>,
 }
 
-impl TokenFetcher {
+impl DataEngine {
     pub fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
         Self {
             client: Arc::new(ClobClient::new_internet("https://clob.polymarket.com")),
-            tokens: HashSet::new(),
+            subscribe_tokens: Arc::new(Mutex::new(HashSet::new())),
+            subscribe_rx: rx,
+            subscribe_tx: tx,
         }
     }
 
-    pub async fn run_crypto(&mut self) -> Result<Vec<Market>> {
-        let market_ids = self.get_crypto_markets_id().await?;
-        let mut set = JoinSet::new();
-        println!("{:?}", market_ids);
-        for id in market_ids {
-            let client = self.client.clone();
-            set.spawn(async move { client.get_market_by_id(&id).await });
+    fn parse_market(market: Market) -> Vec<Token> {
+        let mut tokens = Vec::with_capacity(2);
+        let mut yes_token = Token::default();
+        let mut no_token = Token::default();
+        if let Some(yes_id) = market.tokens.get(0) {
+            yes_token.token_id = Some(yes_id.clone());
+        } else {
+            yes_token.is_valid = false;
         }
-        let mut markets: Vec<Market> = Vec::with_capacity(512);
-        while let Some(res) = set.join_next().await {
-            match res {
-                Ok(Ok(market)) => markets.push(market),
-                Ok(Err(e)) => eprintln!("API 请求失败: {:?}", e), // 捕获业务错误
-                Err(e) => eprintln!("任务执行崩溃: {:?}", e), // 捕获 JoinError (如 panic)
+        if let Some(yes_outcome) = market.outcomes.get(0) {
+            yes_token.outcome = Some(yes_outcome.clone());
+        } else {
+            yes_token.is_valid = false;
+        }
+        yes_token.winner = true;
+
+        if let Some(no_id) = market.tokens.get(1) {
+            no_token.token_id = Some(no_id.clone());
+        } else {
+            no_token.is_valid = false;
+        }
+        if let Some(no_outcome) = market.outcomes.get(1) {
+            no_token.outcome = Some(no_outcome.clone());
+        } else {
+            no_token.is_valid = false;
+        }
+        no_token.winner = true;
+
+        tokens.push(yes_token);
+        tokens.push(no_token);
+        return tokens;
+    }
+
+    pub async fn stream_crypto_tokens(&mut self) {
+        let internal = std::time::Duration::from_mins(10);
+        loop {
+            let market_ids: Vec<String>;
+            match self.get_crypto_markets_id().await {
+                Ok(ids) => {
+                    market_ids = ids;
+                }
+                Err(e) => {
+                    eprintln!("fail to get crypto ids: {}", e);
+                    tokio::time::sleep(internal).await;
+                    continue;
+                }
+            }
+
+            let mut set = JoinSet::new();
+            println!("{:?}", market_ids);
+            for id in market_ids {
+                let client = self.client.clone();
+                set.spawn(async move { client.get_market_by_id(&id).await });
+            }
+            while let Some(res) = set.join_next().await {
+                match res {
+                    Ok(Ok(market)) => {
+                        let tokens = DataEngine::parse_market(market);
+                        for mut token in tokens {
+                            token.token_type = TokenType::CRYPTO;
+                            match self.subscribe_tx.send(token) {
+                                Ok(_) => (),
+                                Err(e) => eprint!("transfer token meets err: {}", e),
+                            }
+                        }
+                    }
+                    Ok(Err(e)) => eprintln!("api fail to request: {:?}", e),
+                    Err(e) => eprintln!("task crash down: {:?}", e),
+                }
+            }
+            tokio::time::sleep(internal).await;
+        }
+    }
+
+    pub async fn receive_crypto_tokens(&mut self) {
+        loop {
+            if let Some(token) = self.subscribe_rx.recv().await {
+                let mut lock = self.subscribe_tokens.lock().await;
+                match token.token_id {
+                    Some(id) => {
+                        if !lock.contains(&id) {
+                            lock.insert(id.clone());
+                            println!("recv tok: {}", id);
+                        }
+                    }
+                    None => {
+                        continue;
+                    }
+                }
             }
         }
-        Ok(markets)
+    }
+
+    pub fn start(self) {
+        let mut engine = self;
+        tokio::spawn(async move {
+            tokio::select! {
+            _ = engine.stream_crypto_tokens() => {},
+            _ = engine.receive_crypto_tokens() => {},
+        }
+        });
     }
 
     async fn get_crypto_markets_id(&self) -> Result<Vec<String>> {
-        let slugs = TokenFetcher::generate_crypto_slugs();
+        let slugs = DataEngine::generate_crypto_slugs();
         return self.get_crypto_markets_by_slugs(slugs).await;
     }
 

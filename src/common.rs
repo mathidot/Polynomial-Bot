@@ -29,6 +29,14 @@ pub enum MarketType {
     KALSHI,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum TokenType {
+    #[default]
+    Unknown,
+    CRYPTO,
+    SPORTS,
+}
+
 #[derive(Debug, Clone, Hash)]
 pub enum Outcome {
     YES,
@@ -93,4 +101,26 @@ pub struct Market {
     pub start_date_iso: String,
     #[serde(default)]
     pub neg_risk: bool,
+}
+
+impl Default for Token {
+    fn default() -> Self {
+        Self {
+            token_type: TokenType::Unknown,
+            token_id: None,
+            outcome: None,
+            winner: false,
+            is_valid: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
+pub struct Token {
+    pub token_type: TokenType,
+    pub token_id: Option<String>,
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub winner: bool,
+    pub is_valid: bool,
 }
