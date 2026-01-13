@@ -1,3 +1,4 @@
+use crate::book::OrderBookManager;
 use crate::common::{
     CRYPTO_PATTERNS,
     EVENT_URL,
@@ -6,23 +7,24 @@ use crate::common::{
     Result,
     SLUG_URL,
     SPORT_URL,
-    WEBSOCKET_MARKET_URL,
-    TokenType,
     Token,
+    TokenType,
+    WEBSOCKET_MARKET_URL,
 };
 use crate::stream::WebSocketStream;
-use crate::types::{ WssChannelType, WssAuth };
+use crate::types::{ StreamMessage, WssAuth, WssChannelType };
 
+use anyhow::anyhow;
 use chrono::Datelike;
-use polyfill_rs::{ PolyfillError, ClobClient, OrderBookImpl };
-use tokio::task::JoinSet;
-use std::{ collections::HashSet, sync::Arc };
-use std::collections::HashMap;
+use dashmap::{ DashMap, DashSet };
+use futures::{ StreamExt, future };
+use polyfill_rs::{ ClobClient, PolyfillError };
 use serde_json::Value;
+use std::collections::HashMap;
 use std::result::Result::Ok;
-use anyhow::{ anyhow };
-use futures::future;
-use tokio::sync::{ mpsc, Mutex };
+use std::{ collections::HashSet, sync::Arc };
+use tokio::sync::{ Mutex, mpsc };
+use tokio::task::JoinSet;
 
 trait TokenApi {
     async fn get_events_by_params(&self, params: HashMap<String, String>) -> Result<Value>;
@@ -71,7 +73,7 @@ impl TokenApi for ClobClient {
                 entry
                     .get("sport")
                     .and_then(|v| v.as_str())
-                    .map_or(false, |s| filtered_list_ref.map_or(true, |set| set.contains(s)))
+                    .map_or(false, |s| { filtered_list_ref.map_or(true, |set| set.contains(s)) })
             })
             .filter_map(|entry| entry.get("tags")?.as_str())
             .flat_map(|s| s.split(','))
@@ -103,13 +105,12 @@ impl TokenApi for ClobClient {
             .and_then(|m: &Value| m.as_array())
             .into_iter()
             .flatten()
-            .filter_map(|m: &Value|
-                m
-                    .get("id")
+            .filter_map(|m: &Value| {
+                m.get("id")
                     .and_then(|id| id.as_str())
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string())
-            )
+            })
             .collect();
         Ok(market_ids)
     }
@@ -132,11 +133,11 @@ impl TokenApi for ClobClient {
 
 pub struct DataEngine {
     client: Arc<ClobClient>,
-    subscribe_tokens: Arc<Mutex<HashSet<String>>>,
+    subscribe_tokens: DashSet<String>,
     subscribe_tx: Arc<Mutex<mpsc::UnboundedSender<Token>>>,
     subscribe_rx: Arc<Mutex<mpsc::UnboundedReceiver<Token>>>,
-    subscribe_stream: Arc<Mutex<HashMap<WssChannelType, WebSocketStream>>>,
-    subscribe_orderbook: Arc<Mutex<HashMap<String, OrderBookImpl>>>,
+    subscribe_stream: DashMap<WssChannelType, Arc<Mutex<WebSocketStream>>>,
+    book_manager: OrderBookManager,
 }
 
 impl DataEngine {
@@ -149,24 +150,28 @@ impl DataEngine {
             nonce: "random_nonce".to_string(),
         };
 
-        let mut subsribe_stream = HashMap::new();
-        let crypto_stream = WebSocketStream::new(WEBSOCKET_MARKET_URL);
-        let sports_stream = WebSocketStream::new(WEBSOCKET_MARKET_URL);
-        let user_stream = WebSocketStream::new(WEBSOCKET_MARKET_URL);
-        let crypto_stream = crypto_stream.with_auth(auth.clone());
-        let sports_stream = sports_stream.with_auth(auth.clone());
-        let user_stream = user_stream.with_auth(auth);
-        subsribe_stream.insert(WssChannelType::Crypto, crypto_stream);
-        subsribe_stream.insert(WssChannelType::Sports, sports_stream);
-        subsribe_stream.insert(WssChannelType::User, user_stream);
+        let subscribe_stream = DashMap::new();
+
+        let channels = [WssChannelType::Crypto, WssChannelType::Sports, WssChannelType::User];
+
+        for chan in channels {
+            let mut stream = WebSocketStream::new(WEBSOCKET_MARKET_URL);
+            if chan == WssChannelType::User {
+                stream = stream.with_auth(auth.clone());
+            } else {
+                stream = stream.with_auth(auth.clone());
+            }
+
+            subscribe_stream.insert(chan, Arc::new(Mutex::new(stream)));
+        }
 
         Self {
             client: Arc::new(ClobClient::new_internet("https://clob.polymarket.com")),
-            subscribe_tokens: Arc::new(Mutex::new(HashSet::new())),
+            subscribe_tokens: DashSet::new(),
             subscribe_rx: Arc::new(Mutex::new(rx)),
             subscribe_tx: Arc::new(Mutex::new(tx)),
-            subscribe_stream: Arc::new(Mutex::new(subsribe_stream)),
-            subscribe_orderbook: Arc::new(Mutex::new(HashMap::new())),
+            subscribe_stream,
+            book_manager: OrderBookManager::new(100),
         }
     }
 
@@ -175,22 +180,20 @@ impl DataEngine {
             .iter()
             .enumerate()
             .zip(market.outcomes.iter())
-            .map(|((i, id), outcome)| {
-                Token {
-                    token_id: id.clone(),
-                    outcome: outcome.clone(),
-                    winner: {
-                        if i == 0 { true } else { false }
-                    },
-                    is_valid: true,
-                    token_type: TokenType::default(),
-                }
+            .map(|((i, id), outcome)| Token {
+                token_id: id.clone(),
+                outcome: outcome.clone(),
+                winner: {
+                    if i == 0 { true } else { false }
+                },
+                is_valid: true,
+                token_type: TokenType::default(),
             })
             .collect()
     }
 
     async fn stream_crypto_tokens(&self) {
-        let internal = std::time::Duration::from_mins(10);
+        let internal = std::time::Duration::from_secs(10 * 60);
         loop {
             let market_ids: Vec<String>;
             match self.get_crypto_markets_id().await {
@@ -230,16 +233,19 @@ impl DataEngine {
         }
     }
 
-    async fn receive_crypto_tokens(&self) {
+    async fn receive_crypto_tokens(self: Arc<Self>) {
         loop {
             if let Some(token) = self.subscribe_rx.lock().await.recv().await {
-                let lock = self.subscribe_tokens.lock().await;
-                if !lock.contains(&token.token_id) {
+                if !self.subscribe_tokens.contains(&token.token_id) {
                     println!("recv token: {}", token.token_id);
-                    match self.subscribe_token(token).await {
-                        Ok(()) => (),
-                        Err(_) => eprintln!("fail to subscrible"),
-                    }
+
+                    let engine = Arc::clone(&self);
+
+                    tokio::spawn(async move {
+                        if let Err(e) = engine.subscribe_token(token).await {
+                            eprintln!("fail to subscribe: {}", e);
+                        }
+                    });
                 }
             }
         }
@@ -248,31 +254,48 @@ impl DataEngine {
     async fn subscribe_token(&self, token: Token) -> Result<()> {
         let token_id = token.token_id.clone();
 
-        let mut orderbooks = self.subscribe_orderbook.lock().await;
-        if orderbooks.contains_key(&token_id) {
+        if let Ok(_) = self.book_manager.get_book(&token.token_id) {
             return Ok(());
         }
 
-        let mut streams = self.subscribe_stream.lock().await;
         let chan_type = match token.token_type {
             TokenType::CRYPTO => WssChannelType::Crypto,
             TokenType::SPORTS => WssChannelType::Sports,
         };
 
-        if let Some(stream) = streams.get_mut(&chan_type) {
-            stream.subscribe_market_channel(vec![token_id.clone()]).await?;
-            let book = OrderBookImpl::new(token_id.clone(), 100);
-            orderbooks.insert(token_id.clone(), book);
-            self.subscribe_tokens.lock().await.insert(token_id);
-            println!("subscribe_ token successfully");
+        let target_stream = self.subscribe_stream.get(&chan_type).map(|r| r.value().clone());
+
+        if let Some(stream_mutex) = target_stream {
+            {
+                let mut stream = stream_mutex.lock().await;
+                stream.subscribe_market_channel(vec![token_id.clone()]).await?;
+            }
+            let book = self.book_manager.get_or_create_book(&token_id);
             Ok(())
         } else {
-            Err(
-                (PolyfillError::Stream {
-                    message: format!("No stream found for token type: {:?}", token.token_type),
-                    kind: polyfill_rs::errors::StreamErrorKind::SubscriptionFailed,
-                }).into()
-            )
+            Err(anyhow!("No stream found for {:?}", chan_type).into())
+        }
+    }
+
+    async fn handle_crypto_message(&self) -> Result<()> {
+        if let Some(crypto_stream) = self.subscribe_stream.get_mut(&WssChannelType::Crypto) {
+            while let Some(message) = crypto_stream.lock().await.next().await {
+                match message? {
+                    StreamMessage::MarketBookUpdate { data } => {
+                        self.book_manager.apply_delta(data)?;
+                    }
+                    StreamMessage::MarketTrade { data } => {
+                        println!("Trade: {} tokens at ${}", data.size, data.price);
+                    }
+                    StreamMessage::Heartbeat { .. } => {
+                        // Connection is alive
+                    }
+                    _ => {}
+                }
+            }
+            return Ok(());
+        } else {
+            return Err(anyhow!("No stream found for crypto stream").into());
         }
     }
 
@@ -345,6 +368,4 @@ impl DataEngine {
         println!("{:?}", events);
         Ok(events)
     }
-
-    async fn get_crypto_tokens(&mut self) {}
 }

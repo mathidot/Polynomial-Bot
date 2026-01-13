@@ -1,5 +1,5 @@
 use std::{ sync::Arc };
-use polynomial::{ fetcher::{ DataEngine } };
+use polynomial::{ data_engine::{ DataEngine } };
 #[tokio::test(flavor = "multi_thread")] // Marks the function as a test
 async fn test_fetch_tokens() {
     let data_engine = Arc::new(DataEngine::new());

@@ -12,11 +12,26 @@ serde_json = "1.0.149"
 smol_str = "0.3.5"
 thiserror = "2.0.17"
 chrono = "0.4"
-tokio = { version = "1.49.0", features = ["full"] }
+tokio = { version = "1.49.0", features = ["full", "tracing"] }
 serde = "1.0.228"
 serde_with = { version = "3.0", features = ["json"] }
 rust_decimal = { version = "1.39.0", features = ["macros", "serde-float"] }
 tracing = "0.1.44"
-tokio-tungstenite = "0.28.0"
 alloy-primitives = { version = "1.5.2", features = ["serde"] }
 rust_decimal_macros = "1.39.0"
+rustls = { version = "0.23.36", default-features = false, features = [
+  "ring",
+  "std",
+] }
+tokio-tungstenite = { version = "0.28.0", features = [
+  "native-tls",
+  "handshake",
+] }
+webpki-roots = "1.0.5"
+rand = "0.9.2"
+base64 = "0.22.1"
+hmac = "0.12.1"
+sha2 = "0.10.9"
+url = "2.5.8"
+console-subscriber = "0.5.0"
+# reqwest = { version = "0.13", features = ["json"] }

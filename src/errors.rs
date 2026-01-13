@@ -335,14 +335,14 @@ impl PolyfillError {
 //     }
 // }
 
-// impl From<serde_json::Error> for PolyfillError {
-//     fn from(err: serde_json::Error) -> Self {
-//         PolyfillError::Parse {
-//             message: format!("JSON parsing failed: {}", err),
-//             source: Some(Box::new(err)),
-//         }
-//     }
-// }
+impl From<serde_json::Error> for PolyfillError {
+    fn from(err: serde_json::Error) -> Self {
+        PolyfillError::Parse {
+            message: format!("JSON parsing failed: {}", err),
+            source: Some(Box::new(err)),
+        }
+    }
+}
 
 // impl From<url::ParseError> for PolyfillError {
 //     fn from(err: url::ParseError) -> Self {

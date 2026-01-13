@@ -12,7 +12,6 @@ use std::pin::Pin;
 use std::task::{ Context, Poll };
 use tokio::sync::mpsc;
 use tracing::{ debug, error, info, warn };
-use rust_decimal_macros::dec;
 
 /// Trait for market data streams
 pub trait MarketStream: Stream<Item = Result<StreamMessage>> + Send + Sync {
@@ -154,12 +153,11 @@ impl WebSocketStream {
     }
 
     /// Subscribe to market data using official Polymarket WebSocket API
+    // Ensure connection
     pub async fn subscribe_async(&mut self, subscription: WssSubscription) -> Result<()> {
-        // Ensure connection
         if self.connection.is_none() {
             self.connect().await?;
         }
-
         // Send subscription message in the format expected by Polymarket
         // The subscription struct will serialize correctly with proper field names
         let message = serde_json
@@ -428,50 +426,50 @@ impl WebSocketStream {
             }
         }
     }
-    // #[allow(dead_code)]
-    // async fn reconnect(&mut self) -> Result<()> {
-    //     let mut delay = self.reconnect_config.base_delay;
-    //     let mut retries = 0;
 
-    //     while retries < self.reconnect_config.max_retries {
-    //         warn!("Attempting to reconnect (attempt {})", retries + 1);
+    #[allow(dead_code)]
+    async fn reconnect(&mut self) -> Result<()> {
+        let mut delay = self.reconnect_config.base_delay;
+        let mut retries = 0;
 
-    //         match self.connect().await {
-    //             Ok(()) => {
-    //                 info!("Successfully reconnected");
-    //                 self.stats.reconnect_count += 1;
+        while retries < self.reconnect_config.max_retries {
+            warn!("Attempting to reconnect (attempt {})", retries + 1);
 
-    //                 // Resubscribe to all previous subscriptions
-    //                 let subscriptions = self.subscriptions.clone();
-    //                 for subscription in subscriptions {
-    //                     self.send_message(serde_json::to_value(subscription)?).await?;
-    //                 }
+            match self.connect().await {
+                Ok(()) => {
+                    info!("Successfully reconnected");
+                    self.stats.reconnect_count += 1;
 
-    //                 return Ok(());
-    //             }
-    //             Err(e) => {
-    //                 error!("Reconnection attempt {} failed: {}", retries + 1, e);
-    //                 retries += 1;
+                    // Resubscribe to all previous subscriptions
+                    let subscriptions = self.subscriptions.clone();
+                    for subscription in subscriptions {
+                        self.send_message(serde_json::to_value(subscription)?).await?;
+                    }
 
-    //                 if retries < self.reconnect_config.max_retries {
-    //                     tokio::time::sleep(delay).await;
-    //                     delay = std::cmp::min(
-    //                         delay.mul_f64(self.reconnect_config.backoff_multiplier),
-    //                         self.reconnect_config.max_delay
-    //                     );
-    //                 }
-    //             }
-    //         }
-    //     }
+                    return Ok(());
+                }
+                Err(e) => {
+                    error!("Reconnection attempt {} failed: {}", retries + 1, e);
+                    retries += 1;
 
-    //     Err(
-    //         PolyfillError::stream(
-    //             format!("Failed to reconnect after {} attempts", self.reconnect_config.max_retries),
-    //             crate::errors::StreamErrorKind::ConnectionFailed
-    //         )
-    //     )
-    // }
-    // / Reconnect with exponential backoff
+                    if retries < self.reconnect_config.max_retries {
+                        tokio::time::sleep(delay).await;
+                        delay = std::cmp::min(
+                            delay.mul_f64(self.reconnect_config.backoff_multiplier),
+                            self.reconnect_config.max_delay
+                        );
+                    }
+                }
+            }
+        }
+
+        Err(
+            PolyfillError::stream(
+                format!("Failed to reconnect after {} attempts", self.reconnect_config.max_retries),
+                crate::errors::StreamErrorKind::ConnectionFailed
+            )
+        )
+    }
 }
 
 impl Stream for WebSocketStream {
