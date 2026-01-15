@@ -10,17 +10,11 @@ pub mod types;
 pub mod utils;
 
 pub mod prelude {
-    pub use crate::book::{ BookAnalytics, OrderBook, OrderBookManager };
+    pub use crate::book::{BookAnalytics, OrderBook, OrderBookManager};
     pub use crate::common::{
-        CRYPTO_PATTERNS,
-        EVENT_URL,
-        MARKET_URL,
-        Market,
-        Result,
-        Token,
-        WEBSOCKET_MARKET_URL,
+        CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, Result, Token, WEBSOCKET_MARKET_URL,
     };
     pub use crate::context::BotContext;
-    pub use crate::stream::WebSocketStream;
-    pub use crate::types::{ StreamMessage, WssAuth, WssChannelType };
+    pub use crate::stream::{MockStream, WebSocketStream};
+    pub use crate::types::{StreamMessage, WssAuth, WssChannelType};
 }
