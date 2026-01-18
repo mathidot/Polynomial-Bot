@@ -318,7 +318,7 @@ impl DataEngine {
         if let Some(crypto_stream) = self.subscribe_read_stream.get_mut(&WssChannelType::Crypto) {
             let mut lock = crypto_stream.lock().await;
             while let Some(message) = lock.next().await {
-                dbg!(message.clone());
+                println!("{:?}", message);
                 match message? {
                     StreamMessage::MarketBookUpdate { data } => {
                         self.book_manager.apply_delta(data)?;

@@ -481,8 +481,8 @@ impl Stream for WebSocketStream {
         if let Some(connection) = &mut self.connection {
             match connection.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(_message))) => {
+                    dbg!(_message.clone());
                     // Simplified message handling
-                    println!("Ready: Ok {:?}", _message);
                     Poll::Ready(
                         Some(
                             Ok(StreamMessage::Heartbeat {
@@ -492,20 +492,17 @@ impl Stream for WebSocketStream {
                     )
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    println!("WebSocket error: {}", e);
                     error!("WebSocket error: {}", e);
                     self.stats.errors += 1;
                     Poll::Ready(Some(Err(e.into())))
                 }
                 Poll::Ready(None) => {
-                    println!("WebSocket stream ended");
                     info!("WebSocket stream ended");
                     Poll::Ready(None)
                 }
                 Poll::Pending => Poll::Pending,
             }
         } else {
-            println!("Ready::None");
             Poll::Ready(None)
         }
     }
@@ -544,6 +541,8 @@ impl Sink<Value> for WebSocketStream {
             .map_err(|e| {
                 PolyfillError::parse(format!("Failed to serialize message: {}", e), None)
             })?;
+
+        dbg!(text.clone());
 
         let ws_message = tokio_tungstenite::tungstenite::Message::Text(text.into());
         let this = self.get_mut();
@@ -898,6 +897,7 @@ mod tests {
             json!({
     "assets_ids": ["109846352757679505774389803672050211592851303062623946489601191839802188684254"],
     "type": "market",
+    "operation": "subscribe",
 });
         let ret = writer.send(payload).await;
         assert!(ret.is_ok());
