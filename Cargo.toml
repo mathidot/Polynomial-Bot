@@ -34,4 +34,5 @@ hmac = "0.12.1"
 sha2 = "0.10.9"
 url = "2.5.8"
 console-subscriber = "0.5.0"
+bytes = "1.11.0"
 # reqwest = { version = "0.13", features = ["json"] }

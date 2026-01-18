@@ -7,7 +7,7 @@ use crate::errors::{ PolyfillError, Result };
 use crate::types::*;
 use chrono::Utc;
 use futures::{ Sink, SinkExt, Stream, StreamExt, stream::{ SplitSink, SplitStream } };
-use serde_json::Value;
+use serde_json::{ Value, json };
 use std::pin::Pin;
 use std::sync::{ Arc, Mutex };
 use std::task::{ Context, Poll };
@@ -132,7 +132,6 @@ impl WebSocketStream {
         mut self
     ) -> Result<(SplitSink<WebSocketStream, Value>, SplitStream<WebSocketStream>)> {
         self.connect().await?;
-        println!("connect successfully");
         let (sink, stream) = self.split();
         Ok((sink, stream))
     }
@@ -147,6 +146,7 @@ impl WebSocketStream {
                 })?;
 
             let ws_message = tokio_tungstenite::tungstenite::Message::Text(text.into());
+
             connection
                 .send(ws_message).await
                 .map_err(|e| {
@@ -193,26 +193,21 @@ impl WebSocketStream {
         let subscription = WssSubscription {
             channel_type: "user".to_string(),
             operation: Some("subscribe".to_string()),
-            markets,
             asset_ids: Vec::new(),
-            initial_dump: Some(true),
-            custom_feature_enabled: None,
             auth: Some(auth),
         };
+
+        todo!();
 
         self.subscribe_async(subscription).await
     }
 
-    /// Subscribe to market channel (order book and trades)
-    /// Market subscriptions do not require authentication
-    pub async fn subscribe_market_channel(&mut self, asset_ids: Vec<String>) -> Result<()> {
+    /// Subscribe to tokens (order book and trades)
+    pub async fn subscribe_tokens(&mut self, asset_ids: Vec<String>) -> Result<()> {
         let subscription = WssSubscription {
             channel_type: "market".to_string(),
             operation: Some("subscribe".to_string()),
-            markets: Vec::new(),
             asset_ids,
-            initial_dump: Some(true),
-            custom_feature_enabled: None,
             auth: None,
         };
         self.subscribe_async(subscription).await
@@ -227,10 +222,7 @@ impl WebSocketStream {
         let subscription = WssSubscription {
             channel_type: "market".to_string(),
             operation: Some("subscribe".to_string()),
-            markets: Vec::new(),
             asset_ids,
-            initial_dump: Some(true),
-            custom_feature_enabled: Some(true),
             auth: None,
         };
 
@@ -242,10 +234,7 @@ impl WebSocketStream {
         let subscription = WssSubscription {
             channel_type: "market".to_string(),
             operation: Some("unsubscribe".to_string()),
-            markets: Vec::new(),
             asset_ids,
-            initial_dump: None,
-            custom_feature_enabled: None,
             auth: None,
         };
 
@@ -253,7 +242,7 @@ impl WebSocketStream {
     }
 
     /// Unsubscribe from user channel
-    pub async fn unsubscribe_user_channel(&mut self, markets: Vec<String>) -> Result<()> {
+    pub async fn unsubscribe_user_channel(&mut self) -> Result<()> {
         let auth = self.auth
             .as_ref()
             .ok_or_else(|| PolyfillError::auth("No authentication provided for WebSocket"))?
@@ -262,10 +251,7 @@ impl WebSocketStream {
         let subscription = WssSubscription {
             channel_type: "user".to_string(),
             operation: Some("unsubscribe".to_string()),
-            markets,
             asset_ids: Vec::new(),
-            initial_dump: None,
-            custom_feature_enabled: None,
             auth: Some(auth),
         };
 
@@ -496,6 +482,7 @@ impl Stream for WebSocketStream {
             match connection.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(_message))) => {
                     // Simplified message handling
+                    println!("Ready: Ok {:?}", _message);
                     Poll::Ready(
                         Some(
                             Ok(StreamMessage::Heartbeat {
@@ -505,17 +492,20 @@ impl Stream for WebSocketStream {
                     )
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    println!("WebSocket error: {}", e);
                     error!("WebSocket error: {}", e);
                     self.stats.errors += 1;
                     Poll::Ready(Some(Err(e.into())))
                 }
                 Poll::Ready(None) => {
+                    println!("WebSocket stream ended");
                     info!("WebSocket stream ended");
                     Poll::Ready(None)
                 }
                 Poll::Pending => Poll::Pending,
             }
         } else {
+            println!("Ready::None");
             Poll::Ready(None)
         }
     }
@@ -567,7 +557,6 @@ impl Sink<Value> for WebSocketStream {
                         crate::errors::StreamErrorKind::MessageCorrupted
                     )
                 })?;
-
             this.stats.messages_sent += 1;
             Ok(())
         } else {
@@ -756,7 +745,6 @@ impl MarketStream for MockStream {
         }
     }
 }
-
 /// Stream manager for handling multiple streams
 #[allow(dead_code)]
 pub struct StreamManager {
@@ -866,5 +854,56 @@ mod tests {
             timestamp: Utc::now(),
         };
         assert!(manager.broadcast_message(message).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_tokio_stream_token_message() -> Result<()> {
+        let (mut ws_stream, r) = tokio_tungstenite::connect_async(
+            "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+        ).await?;
+
+        println!("response: {:?}", r);
+
+        let payload =
+            json!({
+    "assets_ids": ["109846352757679505774389803672050211592851303062623946489601191839802188684254"],
+    "type": "market",
+    "operation": "subscribe",
+});
+        let text = serde_json
+            ::to_string(&payload)
+            .map_err(|e| {
+                PolyfillError::parse(format!("Failed to serialize message: {}", e), None)
+            })?;
+        let ws_message = tokio_tungstenite::tungstenite::Message::Text(text.into());
+        let ret = ws_stream.send(ws_message).await;
+        assert!(ret.is_ok());
+        // ws_stream.send(tokio_tungstenite::tungstenite::Message::Text("hello world".into())).await?;
+
+        loop {
+            if let Some(message) = ws_stream.next().await {
+                println!("message: {:?}", message);
+            } else {
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stream_message() {
+        let stream = WebSocketStream::new("wss://ws-subscriptions-clob.polymarket.com/ws/market");
+        let ret = stream.init_and_split().await;
+        assert!(ret.is_ok());
+        let (mut writer, mut reader) = ret.unwrap();
+        let payload =
+            json!({
+    "assets_ids": ["109846352757679505774389803672050211592851303062623946489601191839802188684254"],
+    "type": "market",
+});
+        let ret = writer.send(payload).await;
+        assert!(ret.is_ok());
+
+        while let Some(message) = reader.next().await {
+            println!("message: {:?}", message);
+        }
     }
 }

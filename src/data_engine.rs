@@ -12,7 +12,7 @@ use crate::common::{
     WEBSOCKET_MARKET_URL,
 };
 use crate::stream::{ MockStream, WebSocketStream };
-use crate::types::{ StreamMessage, WssAuth, WssChannelType };
+use crate::types::{ StreamMessage, WssAuth, WssChannelType, WssSubscription };
 use anyhow::anyhow;
 use chrono::Datelike;
 use chrono::Utc;
@@ -148,20 +148,20 @@ impl DataEngine {
     pub async fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
 
-        let auth = WssAuth {
-            address: "your_eth_address".to_string(),
-            signature: "your_signature".to_string(),
-            timestamp: chrono::Utc::now().timestamp() as u64,
-            nonce: "random_nonce".to_string(),
-        };
+        // let auth = WssAuth {
+        //     address: "your_eth_address".to_string(),
+        //     signature: "your_signature".to_string(),
+        //     timestamp: chrono::Utc::now().timestamp() as u64,
+        //     nonce: "random_nonce".to_string(),
+        // };
 
         let channels = [WssChannelType::Crypto, WssChannelType::Sports, WssChannelType::User];
         let subscribe_write_stream = DashMap::new();
         let subscribe_read_stream = DashMap::new();
 
         for chan in channels {
-            let mut stream = WebSocketStream::new(WEBSOCKET_MARKET_URL);
-            stream = stream.with_auth(auth.clone());
+            let stream = WebSocketStream::new(WEBSOCKET_MARKET_URL);
+            // stream = stream.with_auth(auth.clone());
             println!("initialize");
             match stream.init_and_split().await {
                 Ok((writer, reader)) => {
@@ -299,13 +299,13 @@ impl DataEngine {
         if let Some(stream_mutex) = target_stream {
             {
                 let mut stream = stream_mutex.lock().await;
-                stream.send(
-                    serde_json::to_value(
-                        json!(
-                        {"token": token.token_id}
-                    )
-                    )?
-                ).await?;
+                let token_subscription = WssSubscription {
+                    channel_type: "market".to_string(),
+                    asset_ids: vec![token.token_id.to_string()],
+                    operation: Some("subscribe".to_string()),
+                    auth: None,
+                };
+                stream.send(serde_json::to_value(token_subscription)?).await?;
             }
             let book = self.book_manager.get_or_create_book(&token_id);
             Ok(())
@@ -351,7 +351,7 @@ impl DataEngine {
 
         let engine3 = self.clone();
         tokio::spawn(async move {
-            engine3.handle_crypto_message().await;
+            let ret = engine3.handle_crypto_message().await;
         });
     }
 
