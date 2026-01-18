@@ -692,6 +692,147 @@ pub struct WssSubscription {
     pub auth: Option<WssAuth>,
 }
 
+/// book Message
+/// Emited when
+/// first subscribe to market
+/// when there is a trade that affects the book
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookMessage {
+    pub event_type: String,
+    pub asset_id: String,
+    pub market: String,
+    pub hash: String,
+    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    pub timestamp: u64,
+    pub buys: Vec<OrderSummary>,
+    pub sells: Vec<OrderSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PriceChange {
+    pub asset_id: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub price: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub size: Decimal,
+    pub side: String,
+    pub hash: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub best_bid: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub best_ask: Decimal,
+}
+
+/// price change Message
+/// Emited when
+/// A new order is placed
+/// An order is cancelled
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PriceChangeMessage {
+    pub event_type: String,
+    pub market: String,
+    pub price_changes: Vec<PriceChange>,
+    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    pub timestamp: u64,
+}
+
+/// Emited when
+/// The minimum tick size of the market changes.
+/// This happens when the book’s price reaches the limits: price > 0.96 or price < 0.04
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TickSizeChangeMessage {
+    pub event_type: String,
+    pub asset_id: String,
+    pub market: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub old_tick_size: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub new_tick_size: Decimal,
+    pub side: String,
+    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    pub timestamp: u64,
+}
+
+/// Emitted when
+/// When a maker or taker is matched create a trade event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LastTradePriceMessage {
+    pub event_type: String,
+    pub asset_id: String,
+    pub market: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub fee_rate_bps: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub price: Decimal,
+    pub side: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub size: Decimal,
+    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    pub timestamp: u64,
+}
+
+/// Emitted when
+/// The best bid and ask prices for a market change
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BestBidAskMessage {
+    pub event_type: String,
+    pub market: String,
+    pub asset_id: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub best_bid: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub best_ask: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub spread: Decimal,
+    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventMessage {
+    pub id: String,
+    pub ticker: String,
+    pub slug: String,
+    pub title: String,
+    pub description: String,
+}
+
+/// Emited when
+/// A new market is created
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewMarketMessage {
+    pub id: String,
+    pub question: String,
+    pub market: String,
+    pub slug: String,
+    pub description: String,
+    pub asset_ids: Vec<String>,
+    pub outcomes: Vec<String>,
+    pub event_message: EventMessage,
+    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    pub timestamp: u64,
+    pub event_type: String,
+}
+
+/// Emited when
+/// A market is resolved
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketResolvedMessage {
+    pub id: String,
+    pub question: String,
+    pub market: String,
+    pub slug: String,
+    pub description: String,
+    pub asset_ids: Vec<String>,
+    pub outcomes: Vec<String>,
+    pub winning_asset_id: String,
+    pub winning_outcome: String,
+    pub event_message: EventMessage,
+    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    pub timestamp: u64,
+    pub event_type: String,
+}
+
 /// WebSocket message types for streaming
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -1037,7 +1178,7 @@ pub struct OrderBookSummary {
     pub asks: Vec<OrderSummary>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderSummary {
     #[serde(with = "rust_decimal::serde::str")]
     pub price: Decimal,
