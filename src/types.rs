@@ -3,11 +3,11 @@
 //! This module defines all the stable public types used throughout the client.
 //! These types are optimized for latency-sensitive trading environments.
 
-use alloy_primitives::{ Address, U256 };
-use chrono::{ DateTime, Utc };
-use rust_decimal::prelude::ToPrimitive;
+use alloy_primitives::{Address, U256};
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde::{ Deserialize, Serialize };
+use rust_decimal::prelude::ToPrimitive;
+use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // FIXED-POINT OPTIMIZATION FOR HOT PATH PERFORMANCE
@@ -284,7 +284,7 @@ pub struct BookLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FastBookLevel {
     pub price: Price, // Price in ticks (u32)
-    pub size: Qty, // Size in fixed-point units (i64)
+    pub size: Qty,    // Size in fixed-point units (i64)
 }
 
 impl FastBookLevel {
@@ -369,7 +369,7 @@ pub struct FastOrderDelta {
     pub timestamp: DateTime<Utc>,
     pub side: Side,
     pub price: Price, // Price in ticks
-    pub size: Qty, // Size in fixed-point units (0 means remove level)
+    pub size: Qty,    // Size in fixed-point units (0 means remove level)
     pub sequence: u64,
 }
 
@@ -381,7 +381,7 @@ impl FastOrderDelta {
     /// This prevents bad data from corrupting our order book.
     pub fn from_order_delta(
         delta: &OrderDelta,
-        tick_size: Option<Decimal>
+        tick_size: Option<Decimal>,
     ) -> std::result::Result<Self, &'static str> {
         // Validate tick alignment if we have a tick size
         if let Some(tick_size) = tick_size {
@@ -398,7 +398,7 @@ impl FastOrderDelta {
         // This avoids string comparisons in the hot path
         let token_id_hash = {
             use std::collections::hash_map::DefaultHasher;
-            use std::hash::{ Hash, Hasher };
+            use std::hash::{Hash, Hasher};
             let mut hasher = DefaultHasher::new();
             delta.token_id.hash(&mut hasher);
             hasher.finish()
@@ -709,6 +709,14 @@ pub struct BookMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderSummary {
+    #[serde(with = "rust_decimal::serde::str")]
+    pub price: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub size: Decimal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PriceChange {
     pub asset_id: String,
     #[serde(with = "rust_decimal::serde::str")]
@@ -833,38 +841,99 @@ pub struct MarketResolvedMessage {
     pub event_type: String,
 }
 
-/// WebSocket message types for streaming
+/// Emited when
+/// when a market order is matched
+/// when a limit order for the user is inclued in a trade
+/// subsequent status changes for trade
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+pub struct TradeMessage {
+    pub asset_id: String,
+    pub event_type: String,
+    pub id: String,
+    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    pub last_update: u64,
+    pub maker_orders: Vec<MarketOrder>,
+    pub market: String,
+    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    pub matchtime: u64,
+    pub outcome: String,
+    pub owner: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub price: Decimal,
+    pub side: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub size: Decimal,
+    pub status: String,
+    pub taker_order_id: String,
+    pub timestamp: u64,
+    pub trade_owner: String,
+    #[serde(rename = "type")]
+    pub trade_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketOrder {
+    pub asset_id: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub matched_amount: Decimal,
+    pub order_id: String,
+    pub owner: String,
+    pub outcome: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub price: Decimal,
+}
+
+/// Emited when
+/// when an order is placed
+/// when an order is updated
+/// when an order is cancelled
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderMessage {
+    pub asset_id: String,
+    pub associate_trades: Vec<String>,
+    pub event_type: String,
+    pub id: String,
+    pub market: String,
+    pub order_owner: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub original_size: Decimal,
+    pub outcome: String,
+    pub owner: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub price: Decimal,
+    pub side: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub size_matched: Decimal,
+    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    pub timestamp: u64,
+    #[serde(rename = "type")]
+    pub order_type: String,
+}
+
+/// Websocket Message from streaming
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "event_type")]
 pub enum StreamMessage {
-    #[serde(rename = "book_update")] BookUpdate {
-        data: OrderDelta,
-    },
-    #[serde(rename = "trade")] Trade {
-        data: FillEvent,
-    },
-    #[serde(rename = "order_update")] OrderUpdate {
-        data: Order,
-    },
-    #[serde(rename = "heartbeat")] Heartbeat {
-        timestamp: DateTime<Utc>,
-    },
-    /// User channel events
-    #[serde(rename = "user_order_update")]
-    UserOrderUpdate {
-        data: Order,
-    },
-    #[serde(rename = "user_trade")] UserTrade {
-        data: FillEvent,
-    },
-    /// Market channel events
-    #[serde(rename = "market_book_update")]
-    MarketBookUpdate {
-        data: OrderDelta,
-    },
-    #[serde(rename = "market_trade")] MarketTrade {
-        data: FillEvent,
-    },
+    #[serde(rename = "book")]
+    Book(BookMessage),
+    #[serde(rename = "price_change")]
+    PriceChange(PriceChangeMessage),
+    #[serde(rename = "tick_size_change")]
+    TickSizeChange(TickSizeChangeMessage),
+    #[serde(rename = "last_trade_price")]
+    LastTradePrice(LastTradePriceMessage),
+    #[serde(rename = "best_bid_ask")]
+    BestBidAsk(BestBidAskMessage),
+    #[serde(rename = "new_market")]
+    NewMarket(NewMarketMessage),
+    #[serde(rename = "market_resolved")]
+    MarketResolved(MarketResolvedMessage),
+    #[serde(rename = "trade")]
+    Trade(TradeMessage),
+    #[serde(rename = "order")]
+    Order(OrderMessage),
+    #[serde(rename = "heartbeat")]
+    Heartbeat(DateTime<Utc>),
 }
 
 /// Subscription parameters for streaming
@@ -1176,14 +1245,6 @@ pub struct OrderBookSummary {
     pub timestamp: u64,
     pub bids: Vec<OrderSummary>,
     pub asks: Vec<OrderSummary>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderSummary {
-    #[serde(with = "rust_decimal::serde::str")]
-    pub price: Decimal,
-    #[serde(with = "rust_decimal::serde::str")]
-    pub size: Decimal,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
