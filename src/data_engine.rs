@@ -1,37 +1,29 @@
 use crate::book::OrderBookManager;
 use crate::common::{
-    CRYPTO_PATTERNS,
-    EVENT_URL,
-    MARKET_URL,
-    Market,
-    Result,
-    SLUG_URL,
-    SPORT_URL,
-    Token,
-    TokenType,
+    CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, Result, SLUG_URL, SPORT_URL, Token, TokenType,
     WEBSOCKET_MARKET_URL,
 };
-use crate::stream::{ MockStream, WebSocketStream };
-use crate::types::{ StreamMessage, WssAuth, WssChannelType, WssSubscription };
+use crate::stream::{MockStream, WebSocketStream};
+use crate::types::{StreamMessage, WssAuth, WssChannelType, WssSubscription};
 use anyhow::anyhow;
 use chrono::Datelike;
 use chrono::Utc;
-use dashmap::{ DashMap, DashSet };
-use futures::stream::{ SplitSink, SplitStream };
-use futures::{ Sink, SinkExt, Stream, StreamExt, future };
-use polyfill_rs::{ ClobClient, PolyfillError, crypto };
-use serde_json::{ Value, json };
+use dashmap::{DashMap, DashSet};
+use futures::stream::{SplitSink, SplitStream};
+use futures::{Sink, SinkExt, Stream, StreamExt, future};
+use polyfill_rs::{ClobClient, PolyfillError, book, crypto};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::result::Result::Ok;
-use std::{ collections::HashSet, sync::Arc };
-use tokio::sync::{ Mutex, mpsc };
+use std::{collections::HashSet, sync::Arc};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
 
 trait TokenApi {
     async fn get_events_by_params(&self, params: HashMap<String, String>) -> Result<Value>;
     async fn get_specified_tag_ids(
         &self,
-        filtered_list: Option<HashSet<String>>
+        filtered_list: Option<HashSet<String>>,
     ) -> Result<Vec<String>>;
 
     async fn get_market_id_by_slug(&self, event_slug: String) -> Result<Vec<String>>;
@@ -41,30 +33,38 @@ trait TokenApi {
 
 impl TokenApi for ClobClient {
     async fn get_events_by_params(&self, params: HashMap<String, String>) -> Result<Value> {
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(EVENT_URL)
             .json(&params)
-            .send().await
+            .send()
+            .await
             .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?;
 
-        let ret = response.json::<Value>().await.map_err(|e| anyhow::anyhow!("{}", e));
+        let ret = response
+            .json::<Value>()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e));
         ret
     }
 
     async fn get_specified_tag_ids(
         &self,
-        filtered_list: Option<HashSet<String>>
+        filtered_list: Option<HashSet<String>>,
     ) -> Result<Vec<String>> {
         let mut tags_set: HashSet<String> = HashSet::new();
         let mut ret: Vec<String> = Vec::new();
 
         let filtered_list_ref = filtered_list.as_ref();
 
-        let sports_json: Value = self.http_client
+        let sports_json: Value = self
+            .http_client
             .get(SPORT_URL)
-            .send().await
+            .send()
+            .await
             .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?
-            .json().await?;
+            .json()
+            .await?;
 
         sports_json
             .as_array()
@@ -74,7 +74,9 @@ impl TokenApi for ClobClient {
                 entry
                     .get("sport")
                     .and_then(|v| v.as_str())
-                    .map_or(false, |s| { filtered_list_ref.map_or(true, |set| set.contains(s)) })
+                    .map_or(false, |s| {
+                        filtered_list_ref.map_or(true, |set| set.contains(s))
+                    })
             })
             .filter_map(|entry| entry.get("tags")?.as_str())
             .flat_map(|s| s.split(','))
@@ -92,11 +94,14 @@ impl TokenApi for ClobClient {
 
     async fn get_market_id_by_slug(&self, event_slug: String) -> Result<Vec<String>> {
         let slug_url = format!("{}/{}", SLUG_URL, event_slug);
-        let resp_json: Value = self.http_client
+        let resp_json: Value = self
+            .http_client
             .get(slug_url)
-            .send().await
+            .send()
+            .await
             .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?
-            .json().await?;
+            .json()
+            .await?;
 
         let markets = resp_json
             .as_object()
@@ -117,18 +122,19 @@ impl TokenApi for ClobClient {
     }
 
     async fn get_market_by_id(&self, condition_id: &str) -> Result<Market> {
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(format!("{}/{}", MARKET_URL, condition_id))
-            .send().await
+            .send()
+            .await
             .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?;
 
-        response
-            .json::<Market>().await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    PolyfillError::parse(format!("Failed to parse response: {}", e), None)
-                )
-            })
+        response.json::<Market>().await.map_err(|e| {
+            anyhow::anyhow!(PolyfillError::parse(
+                format!("Failed to parse response: {}", e),
+                None
+            ))
+        })
     }
 }
 
@@ -155,7 +161,11 @@ impl DataEngine {
         //     nonce: "random_nonce".to_string(),
         // };
 
-        let channels = [WssChannelType::Crypto, WssChannelType::Sports, WssChannelType::User];
+        let channels = [
+            WssChannelType::Crypto,
+            WssChannelType::Sports,
+            WssChannelType::User,
+        ];
         let subscribe_write_stream = DashMap::new();
         let subscribe_read_stream = DashMap::new();
 
@@ -186,16 +196,15 @@ impl DataEngine {
     }
 
     fn parse_market(market: Market) -> Vec<Token> {
-        market.tokens
+        market
+            .tokens
             .iter()
             .enumerate()
             .zip(market.outcomes.iter())
             .map(|((i, id), outcome)| Token {
                 token_id: id.clone(),
                 outcome: outcome.clone(),
-                winner: {
-                    if i == 0 { true } else { false }
-                },
+                winner: { if i == 0 { true } else { false } },
                 is_valid: true,
                 token_type: TokenType::default(),
             })
@@ -294,7 +303,10 @@ impl DataEngine {
             TokenType::SPORTS => WssChannelType::Sports,
         };
 
-        let target_stream = self.subscribe_write_stream.get(&chan_type).map(|r| r.value().clone());
+        let target_stream = self
+            .subscribe_write_stream
+            .get(&chan_type)
+            .map(|r| r.value().clone());
 
         if let Some(stream_mutex) = target_stream {
             {
@@ -305,7 +317,9 @@ impl DataEngine {
                     operation: Some("subscribe".to_string()),
                     auth: None,
                 };
-                stream.send(serde_json::to_value(token_subscription)?).await?;
+                stream
+                    .send(serde_json::to_value(token_subscription)?)
+                    .await?;
             }
             let book = self.book_manager.get_or_create_book(&token_id);
             Ok(())
@@ -320,14 +334,32 @@ impl DataEngine {
             while let Some(message) = lock.next().await {
                 println!("{:?}", message);
                 match message? {
-                    StreamMessage::MarketBookUpdate { data } => {
-                        self.book_manager.apply_delta(data)?;
+                    StreamMessage::Book(book) => {
+                        todo!()
                     }
-                    StreamMessage::MarketTrade { data } => {
-                        println!("Trade: {} tokens at ${}", data.size, data.price);
+                    StreamMessage::PriceChange(price_change) => {
+                        todo!()
                     }
-                    StreamMessage::Heartbeat { .. } => {
-                        // Connection is alive
+                    StreamMessage::TickSizeChange(tick_size_change) => {
+                        todo!()
+                    }
+                    StreamMessage::LastTradePrice(last_trade_price) => {
+                        todo!()
+                    }
+                    StreamMessage::BestBidAsk(best_bid_ask) => {
+                        todo!()
+                    }
+                    StreamMessage::NewMarket(new_market) => {
+                        todo!()
+                    }
+                    StreamMessage::MarketResolved(market_resolved) => {
+                        todo!()
+                    }
+                    StreamMessage::Trade(trade) => {
+                        todo!()
+                    }
+                    StreamMessage::Order(order) => {
+                        todo!()
                     }
                     _ => {}
                 }
@@ -361,7 +393,9 @@ impl DataEngine {
     }
 
     async fn get_crypto_markets_by_slugs(&self, slugs: Vec<String>) -> Result<Vec<String>> {
-        let futures = slugs.iter().map(|slug| self.get_market_id_by_slug(slug.clone()));
+        let futures = slugs
+            .iter()
+            .map(|slug| self.get_market_id_by_slug(slug.clone()));
         let results = future::join_all(futures).await;
         let market_ids: Vec<String> = results
             .into_iter()
@@ -393,7 +427,7 @@ impl DataEngine {
 
     async fn get_specified_tag_ids(
         &mut self,
-        filtered_list: Option<HashSet<String>>
+        filtered_list: Option<HashSet<String>>,
     ) -> Result<Vec<String>> {
         let res = self.client.get_specified_tag_ids(filtered_list).await;
         return res;
@@ -406,8 +440,7 @@ impl DataEngine {
         ]);
 
         let val = self.client.get_events_by_params(params).await?;
-        let events: Vec<String> = serde_json
-            ::from_value(val)
+        let events: Vec<String> = serde_json::from_value(val)
             .map_err(|e| anyhow::anyhow!("here should be string of vec [{}]", e))?;
         println!("{:?}", events);
         Ok(events)
