@@ -698,14 +698,13 @@ pub struct WssSubscription {
 /// when there is a trade that affects the book
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookMessage {
-    pub event_type: String,
     pub asset_id: String,
     pub market: String,
     pub hash: String,
     #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
     pub timestamp: u64,
-    pub buys: Vec<OrderSummary>,
-    pub sells: Vec<OrderSummary>,
+    pub bids: Vec<OrderSummary>,
+    pub asks: Vec<OrderSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -737,7 +736,6 @@ pub struct PriceChange {
 /// An order is cancelled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PriceChangeMessage {
-    pub event_type: String,
     pub market: String,
     pub price_changes: Vec<PriceChange>,
     #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
@@ -749,7 +747,6 @@ pub struct PriceChangeMessage {
 /// This happens when the book’s price reaches the limits: price > 0.96 or price < 0.04
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TickSizeChangeMessage {
-    pub event_type: String,
     pub asset_id: String,
     pub market: String,
     #[serde(with = "rust_decimal::serde::str")]
@@ -765,7 +762,6 @@ pub struct TickSizeChangeMessage {
 /// When a maker or taker is matched create a trade event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LastTradePriceMessage {
-    pub event_type: String,
     pub asset_id: String,
     pub market: String,
     #[serde(with = "rust_decimal::serde::str")]
@@ -783,7 +779,6 @@ pub struct LastTradePriceMessage {
 /// The best bid and ask prices for a market change
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BestBidAskMessage {
-    pub event_type: String,
     pub market: String,
     pub asset_id: String,
     #[serde(with = "rust_decimal::serde::str")]
@@ -819,7 +814,6 @@ pub struct NewMarketMessage {
     pub event_message: EventMessage,
     #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
     pub timestamp: u64,
-    pub event_type: String,
 }
 
 /// Emited when
@@ -838,7 +832,6 @@ pub struct MarketResolvedMessage {
     pub event_message: EventMessage,
     #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
     pub timestamp: u64,
-    pub event_type: String,
 }
 
 /// Emited when
@@ -848,7 +841,6 @@ pub struct MarketResolvedMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeMessage {
     pub asset_id: String,
-    pub event_type: String,
     pub id: String,
     #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
     pub last_update: u64,
@@ -891,7 +883,6 @@ pub struct MarketOrder {
 pub struct OrderMessage {
     pub asset_id: String,
     pub associate_trades: Vec<String>,
-    pub event_type: String,
     pub id: String,
     pub market: String,
     pub order_owner: String,
