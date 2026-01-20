@@ -407,11 +407,13 @@ impl Stream for WebSocketStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // First check message buffer
         if let Some(message) = self.msg_buffer.pop_front() {
+            println!("message from buffer: {:?}", message);
             return Poll::Ready(Some(Ok(message)));
         }
 
         // Second check internal channel
         if let Poll::Ready(Some(message)) = self.rx.poll_recv(cx) {
+            println!("message from internal channel: {:?}", message);
             return Poll::Ready(Some(Ok(message)));
         }
 
@@ -419,6 +421,7 @@ impl Stream for WebSocketStream {
         if let Some(connection) = &mut self.connection {
             match connection.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(_message))) => {
+                    println!("message from websocket connection: {}", _message);
                     let text = match _message {
                         Message::Text(text) => text,
                         _ => {
@@ -445,15 +448,20 @@ impl Stream for WebSocketStream {
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    println!("WebSocket error: {}", e);
                     error!("WebSocket error: {}", e);
                     self.stats.errors += 1;
                     Poll::Ready(Some(Err(e.into())))
                 }
                 Poll::Ready(None) => {
+                    println!("WebSocket stream ended");
                     info!("WebSocket stream ended");
                     Poll::Ready(None)
                 }
-                Poll::Pending => Poll::Pending,
+                Poll::Pending => {
+                    println!("WebSocket stream pending");
+                    Poll::Pending
+                }
             }
         } else {
             Poll::Ready(None)
@@ -486,8 +494,6 @@ impl Sink<Value> for WebSocketStream {
         let text = serde_json::to_string(&item).map_err(|e| {
             PolyfillError::parse(format!("Failed to serialize message: {}", e), None)
         })?;
-
-        dbg!(text.clone());
 
         let ws_message = tokio_tungstenite::tungstenite::Message::Text(text.into());
         let this = self.get_mut();
@@ -800,7 +806,7 @@ mod tests {
         println!("response: {:?}", r);
 
         let payload = json!({
-            "assets_ids": ["109846352757679505774389803672050211592851303062623946489601191839802188684254"],
+            "assets_ids": ["3936340147748920096456624623493606422377714730122392075827122179093813941108"],
             "type": "market",
             "operation": "subscribe",
         });
@@ -825,7 +831,7 @@ mod tests {
         assert!(ret.is_ok());
         let (mut writer, mut reader) = ret.unwrap();
         let payload = json!({
-            "assets_ids": ["109846352757679505774389803672050211592851303062623946489601191839802188684254"],
+            "assets_ids": ["3936340147748920096456624623493606422377714730122392075827122179093813941108"],
             "type": "market",
             "operation": "subscribe",
         });

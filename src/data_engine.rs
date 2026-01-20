@@ -255,8 +255,6 @@ impl DataEngine {
         loop {
             if let Some(token) = self.subscribe_rx.lock().await.recv().await {
                 if !self.subscribe_tokens.contains(&token.token_id) {
-                    println!("recv token: {}", token.token_id);
-
                     let engine = Arc::clone(&self);
 
                     // tokio::spawn(async move {
@@ -332,34 +330,33 @@ impl DataEngine {
         if let Some(crypto_stream) = self.subscribe_read_stream.get_mut(&WssChannelType::Crypto) {
             let mut lock = crypto_stream.lock().await;
             while let Some(message) = lock.next().await {
-                println!("{:?}", message);
                 match message? {
                     StreamMessage::Book(book) => {
-                        todo!()
+                        println!("receive book: {:?}", book);
                     }
                     StreamMessage::PriceChange(price_change) => {
-                        todo!()
+                        println!("receive price change: {:?}", price_change);
                     }
                     StreamMessage::TickSizeChange(tick_size_change) => {
-                        todo!()
+                        println!("receive tick size change: {:?}", tick_size_change);
                     }
                     StreamMessage::LastTradePrice(last_trade_price) => {
-                        todo!()
+                        println!("receive last trade price: {:?}", last_trade_price);
                     }
                     StreamMessage::BestBidAsk(best_bid_ask) => {
-                        todo!()
+                        println!("receive best bid ask: {:?}", best_bid_ask);
                     }
                     StreamMessage::NewMarket(new_market) => {
-                        todo!()
+                        println!("receive new market: {:?}", new_market);
                     }
                     StreamMessage::MarketResolved(market_resolved) => {
-                        todo!()
+                        println!("receive market resolved: {:?}", market_resolved);
                     }
                     StreamMessage::Trade(trade) => {
-                        todo!()
+                        println!("receive trade: {:?}", trade);
                     }
                     StreamMessage::Order(order) => {
-                        todo!()
+                        println!("receive order: {:?}", order);
                     }
                     _ => {}
                 }
