@@ -11,6 +11,7 @@ use futures::{
     stream::{SplitSink, SplitStream},
 };
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -57,6 +58,8 @@ pub struct WebSocketStream {
     stats: StreamStats,
     /// Reconnection configuration
     reconnect_config: ReconnectConfig,
+    /// message buffer
+    msg_buffer: VecDeque<StreamMessage>,
 }
 
 /// Stream statistics
@@ -111,6 +114,7 @@ impl WebSocketStream {
                 reconnect_count: 0,
             },
             reconnect_config: ReconnectConfig::default(),
+            msg_buffer: VecDeque::new(),
         }
     }
 
@@ -266,7 +270,6 @@ impl WebSocketStream {
     }
 
     /// Handle incoming WebSocket messages
-    #[allow(dead_code)]
     async fn handle_message(
         &mut self,
         message: tokio_tungstenite::tungstenite::Message,
@@ -276,11 +279,13 @@ impl WebSocketStream {
                 debug!("Received WebSocket message: {}", text);
 
                 // Parse the message according to Polymarket's format
-                let stream_message = self.parse_polymarket_message(&text)?;
+                let msgs = self.parse_polymarket_message(&text)?;
 
-                // Send to internal channel
-                if let Err(e) = self.tx.send(stream_message) {
-                    error!("Failed to send message to internal channel: {}", e);
+                for msg in msgs {
+                    // Send to internal channel
+                    if let Err(e) = self.tx.send(msg) {
+                        error!("Failed to send message to internal channel: {}", e);
+                    }
                 }
 
                 self.stats.messages_received += 1;
@@ -315,7 +320,7 @@ impl WebSocketStream {
     }
 
     // /// Parse Polymarket WebSocket message format
-    fn parse_polymarket_message(&self, text: &str) -> Result<StreamMessage> {
+    fn parse_polymarket_message(&self, text: &str) -> Result<Vec<StreamMessage>> {
         let value: Value = serde_json::from_str(&text).map_err(|e| {
             PolyfillError::parse(
                 format!("Failed to parse WebSocket message: {}", e),
@@ -323,96 +328,33 @@ impl WebSocketStream {
             )
         })?;
 
-        // Extract message type
-        let message_type = value
-            .get("event_type")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                PolyfillError::parse("Missing 'type' field in WebSocket message", None)
-            })?;
-
-        match message_type {
-            "book" => {
-                let data = serde_json::from_value(value).map_err(|e| {
-                    PolyfillError::parse(format!("Failed to parse book: {}", e), Some(Box::new(e)))
-                })?;
-                Ok(StreamMessage::Book(data))
-            }
-            "price_change" => {
-                let data = serde_json::from_value(value).map_err(|e| {
+        if let Some(array) = value.as_array() {
+            let mut messages = Vec::new();
+            for item in array {
+                let message: StreamMessage = serde_json::from_value(item.clone()).map_err(|e| {
                     PolyfillError::parse(
-                        format!("Failed to parse price_change: {}", e),
+                        format!("message item parse error: {}", e),
                         Some(Box::new(e)),
                     )
                 })?;
-                Ok(StreamMessage::PriceChange(data))
+                messages.push(message);
             }
-            "tick_size_change" => {
-                let data = serde_json::from_value(value).map_err(|e| {
-                    PolyfillError::parse(
-                        format!("Failed to parse tick_size_change: {}", e),
-                        Some(Box::new(e)),
-                    )
-                })?;
-                Ok(StreamMessage::TickSizeChange(data))
-            }
-            "last_trade_price" => {
-                let data = serde_json::from_value(value).map_err(|e| {
-                    PolyfillError::parse(
-                        format!("Failed to parse user last_trade_price: {}", e),
-                        Some(Box::new(e)),
-                    )
-                })?;
-                Ok(StreamMessage::LastTradePrice(data))
-            }
-            "best_bid_ask" => {
-                let data = serde_json::from_value(value).map_err(|e| {
-                    PolyfillError::parse(
-                        format!("Failed to parse best_bid_ask: {}", e),
-                        Some(Box::new(e)),
-                    )
-                })?;
-                Ok(StreamMessage::BestBidAsk(data))
-            }
-            "new_market" => {
-                let data = serde_json::from_value(value).map_err(|e| {
-                    PolyfillError::parse(
-                        format!("Failed to parse market new_market: {}", e),
-                        Some(Box::new(e)),
-                    )
-                })?;
-                Ok(StreamMessage::NewMarket(data))
-            }
-            "market_resolved" => {
-                let data = serde_json::from_value(value).map_err(|e| {
-                    PolyfillError::parse(
-                        format!("Failed to parse market_resolved: {}", e),
-                        Some(Box::new(e)),
-                    )
-                })?;
-                Ok(StreamMessage::MarketResolved(data))
-            }
-            "trade" => {
-                let data = serde_json::from_value(value).map_err(|e| {
-                    PolyfillError::parse(format!("Failed to parse trade: {}", e), Some(Box::new(e)))
-                })?;
-                Ok(StreamMessage::Trade(data))
-            }
-            "order" => {
-                let data = serde_json::from_value(value).map_err(|e| {
-                    PolyfillError::parse(format!("Failed to parse order: {}", e), Some(Box::new(e)))
-                })?;
-                Ok(StreamMessage::Trade(data))
-            }
-            _ => {
-                warn!("Unknown message type: {}", message_type);
-                // Return heartbeat as fallback
-                Ok(StreamMessage::Heartbeat(Utc::now()))
-            }
+            return Ok(messages);
         }
+
+        if value.is_object() {
+            let message: StreamMessage = serde_json::from_value(value).map_err(|e| {
+                PolyfillError::parse(format!("object parse error: {}", e), Some(Box::new(e)))
+            })?;
+            return Ok(vec![message]);
+        }
+
+        Err(PolyfillError::stream(
+            "Fail to parse polymarket message",
+            crate::errors::StreamErrorKind::MessageCorrupted,
+        ))
     }
 
-    #[allow(dead_code)]
     async fn reconnect(&mut self) -> Result<()> {
         let mut delay = self.reconnect_config.base_delay;
         let mut retries = 0;
@@ -463,7 +405,12 @@ impl Stream for WebSocketStream {
     type Item = Result<StreamMessage>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // First check internal channel
+        // First check message buffer
+        if let Some(message) = self.msg_buffer.pop_front() {
+            return Poll::Ready(Some(Ok(message)));
+        }
+
+        // Second check internal channel
         if let Poll::Ready(Some(message)) = self.rx.poll_recv(cx) {
             return Poll::Ready(Some(Ok(message)));
         }
@@ -485,7 +432,15 @@ impl Stream for WebSocketStream {
                         }
                     };
                     match self.parse_polymarket_message(&text) {
-                        Ok(parsed_message) => Poll::Ready(Some(Ok(parsed_message))),
+                        Ok(msgs) => {
+                            let mut msg_it = msgs.into_iter();
+                            if let Some(first) = msg_it.next() {
+                                self.msg_buffer.extend(msg_it);
+                                return Poll::Ready(Some(Ok(first)));
+                            } else {
+                                return Poll::Ready(None);
+                            }
+                        }
                         Err(e) => Poll::Ready(Some(Err(e))),
                     }
                 }
