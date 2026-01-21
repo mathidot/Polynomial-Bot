@@ -10,12 +10,15 @@ use futures::{
     Sink, SinkExt, Stream, StreamExt,
     stream::{SplitSink, SplitStream},
 };
+use rand::Rng;
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::{Sleep, sleep};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
 
@@ -569,38 +572,32 @@ impl MarketStream for WebSocketStream {
 }
 
 /// Mock stream for testing
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MockStream {
-    messages: Vec<Result<StreamMessage>>,
     pub sent_messages: Arc<Mutex<Vec<serde_json::Value>>>,
     index: usize,
+    send_count: usize,
     connected: bool,
+    sleep_timer: Pin<Box<Sleep>>,
 }
 
 impl Default for MockStream {
     fn default() -> Self {
-        Self::new()
+        Self::new(4096)
     }
 }
 
 impl Unpin for MockStream {}
 
 impl MockStream {
-    pub fn new() -> Self {
+    pub fn new(cnt: usize) -> Self {
         Self {
-            messages: Vec::new(),
             sent_messages: Arc::new(Mutex::new(Vec::new())),
             index: 0,
+            send_count: cnt,
             connected: true,
+            sleep_timer: Box::pin(sleep(Duration::from_secs(1))),
         }
-    }
-
-    pub fn add_message(&mut self, message: StreamMessage) {
-        self.messages.push(Ok(message));
-    }
-
-    pub fn add_error(&mut self, error: PolyfillError) {
-        self.messages.push(Err(error));
     }
 
     pub fn set_connected(&mut self, connected: bool) {
@@ -612,12 +609,25 @@ impl Stream for MockStream {
     type Item = Result<StreamMessage>;
 
     fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.index >= self.messages.len() {
+        if self.index >= self.send_count {
             Poll::Ready(None)
         } else {
-            let message = self.messages[self.index].clone();
-            self.index += 1;
-            Poll::Ready(Some(message))
+            match self.sleep_timer.as_mut().poll(_cx) {
+                Poll::Pending => {
+                    return Poll::Pending;
+                }
+                Poll::Ready(_) => {
+                    let message: StreamMessage = rand::rng().random();
+                    self.index += 1;
+
+                    let random_millis = rand::rng().random_range(100..1000);
+                    self.sleep_timer
+                        .as_mut()
+                        .set(sleep(Duration::from_millis(random_millis)));
+
+                    Poll::Ready(Some(Ok(message)))
+                }
+            }
         }
     }
 }
@@ -675,11 +685,11 @@ impl MarketStream for MockStream {
 
     fn get_stats(&self) -> StreamStats {
         StreamStats {
-            messages_received: self.messages.len() as u64,
-            messages_sent: 0,
-            errors: self.messages.iter().filter(|m| m.is_err()).count() as u64,
+            messages_received: 0,
+            messages_sent: self.index as u64,
+            errors: 0,
             last_message_time: None,
-            connection_uptime: std::time::Duration::ZERO,
+            connection_uptime: std::time::Duration::from_micros(1),
             reconnect_count: 0,
         }
     }
@@ -734,67 +744,26 @@ mod tests {
 
     use super::*;
 
-    // #[tokio::test]
-    // async fn test_mock_stream_multithreaded() {
-    //     use futures::{SinkExt, StreamExt};
-    //     use serde_json::json;
+    #[tokio::test]
+    async fn test_mock_stream_multithreaded() {
+        use futures::{SinkExt, StreamExt};
+        use serde_json::json;
 
-    //     let mut mock = MockStream::new();
-    //     mock.add_message(StreamMessage::Heartbeat {
-    //         timestamp: Utc::now(),
-    //     });
-    //     mock.add_message(StreamMessage::Heartbeat {
-    //         timestamp: Utc::now(),
-    //     });
+        let mock = MockStream::new(4096);
 
-    //     let sent_messages_tracker = mock.sent_messages.clone();
+        let (mut sink, mut stream) = mock.split();
 
-    //     let (mut sink, mut stream) = mock.split();
+        while let Some(msg) = stream.next().await {
+            dbg!(msg);
+        }
+    }
 
-    //     let reader_task = tokio::spawn(async move {
-    //         let mut count = 0;
-    //         while let Some(msg) = stream.next().await {
-    //             match msg {
-    //                 Ok(StreamMessage::Heartbeat { .. }) => {
-    //                     count += 1;
-    //                 }
-    //                 _ => {}
-    //             }
-    //         }
-    //         count
-    //     });
-
-    //     let writer_task = tokio::spawn(async move {
-    //         let subscribe_cmd = json!({
-    //             "action": "subscribe",
-    //             "market": "ETH-USD"
-    //         });
-    //         sink.send(subscribe_cmd).await.expect("Send failed");
-    //     });
-
-    //     let (read_count, write_res) = tokio::join!(reader_task, writer_task);
-
-    //     assert_eq!(read_count.unwrap(), 2);
-    //     assert!(write_res.is_ok());
-    //     let sent_msgs = sent_messages_tracker.lock().unwrap();
-    //     assert_eq!(sent_msgs.len(), 1);
-    //     assert_eq!(sent_msgs[0]["market"], "ETH-USD");
-    //     println!("Multi-threaded test passed: Sent and Received successfully!");
-    //     assert!(false);
-    // }
-
-    // #[test]
-    // fn test_stream_manager() {
-    //     let mut manager = StreamManager::new();
-    //     let mock_stream = Box::new(MockStream::new());
-    //     manager.add_stream(mock_stream);
-
-    //     // Test message broadcasting
-    //     let message = StreamMessage::Heartbeat {
-    //         timestamp: Utc::now(),
-    //     };
-    //     assert!(manager.broadcast_message(message).is_ok());
-    // }
+    #[test]
+    fn test_stream_manager() {
+        let mut manager = StreamManager::new();
+        let mock_stream = Box::new(MockStream::new(4096));
+        manager.add_stream(mock_stream);
+    }
 
     #[tokio::test]
     async fn test_tokio_stream_token_message() -> Result<()> {
