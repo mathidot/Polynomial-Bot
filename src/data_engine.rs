@@ -1,10 +1,12 @@
-use crate::book::OrderBookManager;
+use crate::book::{OrderBook, OrderBookManager};
 use crate::common::{
     CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, Result, SLUG_URL, SPORT_URL, Token, TokenType,
     WEBSOCKET_MARKET_URL,
 };
 use crate::stream::{MockStream, WebSocketStream};
-use crate::types::{StreamMessage, WssAuth, WssChannelType, WssSubscription};
+use crate::types::{
+    BookMessage, OrderDelta, StreamMessage, WssAuth, WssChannelType, WssSubscription,
+};
 use anyhow::anyhow;
 use chrono::Datelike;
 use chrono::Utc;
@@ -14,7 +16,7 @@ use futures::{Sink, SinkExt, Stream, StreamExt, future};
 use polyfill_rs::{ClobClient, PolyfillError, book, crypto};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::result::Result::Ok;
+use std::env::consts::FAMILY;
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
@@ -138,6 +140,24 @@ impl TokenApi for ClobClient {
     }
 }
 
+fn parse_market(market: Market) -> Vec<Token> {
+    market
+        .tokens
+        .iter()
+        .enumerate()
+        .zip(market.outcomes.iter())
+        .map(|((i, id), outcome)| Token {
+            token_id: id.clone(),
+            outcome: outcome.clone(),
+            winner: { if i == 0 { true } else { false } },
+            is_valid: true,
+            token_type: TokenType::default(),
+        })
+        .collect()
+}
+
+type MessageHandler =
+    Box<dyn Fn(&mut OrderBookManager, StreamMessage) -> Result<()> + Send + Sync + 'static>;
 pub struct DataEngine {
     client: Arc<ClobClient>,
     subscribe_tokens: DashSet<String>,
@@ -148,19 +168,12 @@ pub struct DataEngine {
     // mock_subscribe_write_stream: DashMap<WssChannelType, Arc<Mutex<SplitSink<MockStream, Value>>>>,
     // mock_subscribe_read_stream: DashMap<WssChannelType, Arc<Mutex<SplitStream<MockStream>>>>,
     book_manager: OrderBookManager,
+    message_handles: HashMap<std::mem::Discriminant<StreamMessage>, MessageHandler>,
 }
 
 impl DataEngine {
     pub async fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-
-        // let auth = WssAuth {
-        //     address: "your_eth_address".to_string(),
-        //     signature: "your_signature".to_string(),
-        //     timestamp: chrono::Utc::now().timestamp() as u64,
-        //     nonce: "random_nonce".to_string(),
-        // };
-
         let channels = [
             WssChannelType::Crypto,
             WssChannelType::Sports,
@@ -184,6 +197,8 @@ impl DataEngine {
             }
         }
 
+        let mut message_handles = HashMap::new();
+
         Self {
             client: Arc::new(ClobClient::new_internet("https://clob.polymarket.com")),
             subscribe_tokens: DashSet::new(),
@@ -192,23 +207,8 @@ impl DataEngine {
             subscribe_write_stream,
             subscribe_read_stream,
             book_manager: OrderBookManager::new(100),
+            message_handles: message_handles,
         }
-    }
-
-    fn parse_market(market: Market) -> Vec<Token> {
-        market
-            .tokens
-            .iter()
-            .enumerate()
-            .zip(market.outcomes.iter())
-            .map(|((i, id), outcome)| Token {
-                token_id: id.clone(),
-                outcome: outcome.clone(),
-                winner: { if i == 0 { true } else { false } },
-                is_valid: true,
-                token_type: TokenType::default(),
-            })
-            .collect()
     }
 
     async fn stream_crypto_tokens(&self) {
@@ -234,7 +234,7 @@ impl DataEngine {
             while let Some(res) = set.join_next().await {
                 match res {
                     Ok(Ok(market)) => {
-                        let tokens = DataEngine::parse_market(market);
+                        let tokens = parse_market(market);
                         for mut token in tokens {
                             token.token_type = TokenType::CRYPTO;
                             match self.subscribe_tx.lock().await.send(token) {
@@ -290,8 +290,6 @@ impl DataEngine {
     }
 
     async fn subscribe_token(&self, token: Token) -> Result<()> {
-        let token_id = token.token_id.clone();
-
         if let Ok(_) = self.book_manager.get_book(&token.token_id) {
             return Ok(());
         }
@@ -319,18 +317,30 @@ impl DataEngine {
                     .send(serde_json::to_value(token_subscription)?)
                     .await?;
             }
-            let book = self.book_manager.get_or_create_book(&token_id);
             Ok(())
         } else {
             Err(anyhow!("No stream found for {:?}", chan_type).into())
         }
     }
 
-    async fn handle_crypto_message(&self) -> Result<()> {
+    fn handle_book_message(&mut self, book: BookMessage) -> Result<()> {
+        if self.book_manager.is_exist(&book.asset_id)? {
+            return Ok(());
+        }
+
+        let order_book = OrderBook::new(book.asset_id, 100);
+        for bid in book.bids {}
+
+        for ask in book.asks {}
+
+        Ok(())
+    }
+
+    async fn handle_message(&self) -> Result<()> {
         if let Some(crypto_stream) = self.subscribe_read_stream.get_mut(&WssChannelType::Crypto) {
             let mut lock = crypto_stream.lock().await;
-            while let Some(message) = lock.next().await {
-                match message? {
+            while let Some(Ok(message)) = lock.next().await {
+                match message.clone() {
                     StreamMessage::Book(book) => {
                         println!("receive book: {:?}", book);
                     }
@@ -380,7 +390,7 @@ impl DataEngine {
 
         let engine3 = self.clone();
         tokio::spawn(async move {
-            let ret = engine3.handle_crypto_message().await;
+            let ret = engine3.handle_message().await;
         });
     }
 
