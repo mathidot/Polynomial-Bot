@@ -1,13 +1,13 @@
 //! Order book management for Polymarket client
 
-use crate::errors::{ PolyfillError, Result };
+use crate::errors::{PolyfillError, Result};
 use crate::types::*;
 use crate::utils::math;
 use chrono::Utc;
 use rust_decimal::Decimal;
 use std::collections::BTreeMap; // BTreeMap keeps prices sorted automatically - crucial for order books
-use std::sync::{ Arc, RwLock }; // For thread-safe access across multiple tasks
-use tracing::{ debug, trace, warn }; // Logging for debugging and monitoring
+use std::sync::{Arc, RwLock}; // For thread-safe access across multiple tasks
+use tracing::{debug, trace, warn}; // Logging for debugging and monitoring
 
 /// High-performance order book implementation
 ///
@@ -80,7 +80,7 @@ impl OrderBook {
         // Hash the token_id once for fast lookups later
         let token_id_hash = {
             use std::collections::hash_map::DefaultHasher;
-            use std::hash::{ Hash, Hasher };
+            use std::hash::{Hash, Hasher};
             let mut hasher = DefaultHasher::new();
             token_id.hash(&mut hasher);
             hasher.finish()
@@ -102,9 +102,8 @@ impl OrderBook {
     /// This tells us the minimum price increment allowed
     /// We store it in ticks for fast validation without conversion overhead
     pub fn set_tick_size(&mut self, tick_size: Decimal) -> Result<()> {
-        let tick_size_ticks = decimal_to_price(tick_size).map_err(|_|
-            PolyfillError::validation("Invalid tick size")
-        )?;
+        let tick_size_ticks = decimal_to_price(tick_size)
+            .map_err(|_| PolyfillError::validation("Invalid tick size"))?;
         self.tick_size_ticks = Some(tick_size_ticks);
         Ok(())
     }
@@ -146,17 +145,14 @@ impl OrderBook {
         // self.asks.iter().next().map(|(&price, &size)| BookLevel { price, size })
 
         // AFTER (fast, ~5ns, no allocation for the lookup):
-        self.asks
-            .iter()
-            .next()
-            .map(|(&price_ticks, &size_units)| {
-                // Convert from internal fixed-point to external Decimal format
-                // This conversion only happens at the API boundary
-                BookLevel {
-                    price: price_to_decimal(price_ticks),
-                    size: qty_to_decimal(size_units),
-                }
-            })
+        self.asks.iter().next().map(|(&price_ticks, &size_units)| {
+            // Convert from internal fixed-point to external Decimal format
+            // This conversion only happens at the API boundary
+            BookLevel {
+                price: price_to_decimal(price_ticks),
+                size: qty_to_decimal(size_units),
+            }
+        })
     }
 
     /// Get the current best bid in fast internal format
@@ -323,9 +319,8 @@ impl OrderBook {
     pub fn apply_delta(&mut self, delta: OrderDelta) -> Result<()> {
         // Convert to fast internal format with tick alignment validation
         let tick_size_decimal = self.tick_size_ticks.map(price_to_decimal);
-        let fast_delta = FastOrderDelta::from_order_delta(&delta, tick_size_decimal).map_err(|e|
-            PolyfillError::validation(format!("Invalid delta: {}", e))
-        )?;
+        let fast_delta = FastOrderDelta::from_order_delta(&delta, tick_size_decimal)
+            .map_err(|e| PolyfillError::validation(format!("Invalid delta: {}", e)))?;
 
         // Use the fast internal version
         self.apply_delta_fast(fast_delta)
@@ -344,7 +339,10 @@ impl OrderBook {
         // Validate sequence ordering - ignore old updates that arrive late
         // This is crucial for maintaining data integrity in real-time systems
         if delta.sequence <= self.sequence {
-            trace!("Ignoring stale delta: {} <= {}", delta.sequence, self.sequence);
+            trace!(
+                "Ignoring stale delta: {} <= {}",
+                delta.sequence, self.sequence
+            );
             return Ok(());
         }
 
@@ -367,8 +365,7 @@ impl OrderBook {
                 // Price is not aligned to tick size - reject the update
                 warn!(
                     "Rejecting misaligned price: {} not divisible by tick size {}",
-                    delta.price,
-                    tick_size_ticks
+                    delta.price, tick_size_ticks
                 );
                 return Err(PolyfillError::validation("Price not aligned to tick size"));
             }
@@ -512,7 +509,7 @@ impl OrderBook {
 
         // Get the levels we'd be trading against
         let levels = match side {
-            Side::BUY => self.asks(None), // If buying, we hit the ask side
+            Side::BUY => self.asks(None),  // If buying, we hit the ask side
             Side::SELL => self.bids(None), // If selling, we hit the bid side
         };
 
@@ -606,7 +603,7 @@ impl OrderBook {
         &self,
         min_price: Decimal,
         max_price: Decimal,
-        side: Side
+        side: Side,
     ) -> Decimal {
         // Convert decimal prices to our internal fixed-point representation
         let min_price_ticks = match decimal_to_price(min_price) {
@@ -624,18 +621,15 @@ impl OrderBook {
 
         let levels: Vec<_> = match side {
             Side::BUY => self.asks.range(min_price_ticks..=max_price_ticks).collect(),
-            Side::SELL =>
-                self.bids
-                    .range(min_price_ticks..=max_price_ticks)
-                    .rev()
-                    .collect(),
+            Side::SELL => self
+                .bids
+                .range(min_price_ticks..=max_price_ticks)
+                .rev()
+                .collect(),
         };
 
         // Sum up the sizes, converting from fixed-point back to Decimal
-        let total_size_units: i64 = levels
-            .into_iter()
-            .map(|(_, &size)| size)
-            .sum();
+        let total_size_units: i64 = levels.into_iter().map(|(_, &size)| size).sum();
         qty_to_decimal(total_size_units)
     }
 
@@ -644,7 +638,7 @@ impl OrderBook {
     pub fn is_valid(&self) -> bool {
         match (self.best_bid(), self.best_ask()) {
             (Some(bid), Some(ask)) => bid.price < ask.price, // Normal market condition
-            _ => true, // Empty book is technically valid
+            _ => true,                                       // Empty book is technically valid
         }
     }
 }
@@ -654,9 +648,9 @@ impl OrderBook {
 #[derive(Debug, Clone)]
 pub struct MarketImpact {
     pub average_price: Decimal, // The average price you'd get across all fills
-    pub impact_pct: Decimal, // How much worse than the best price (as percentage)
-    pub total_cost: Decimal, // Total amount you'd pay/receive
-    pub size_filled: Decimal, // How much of your order got filled
+    pub impact_pct: Decimal,    // How much worse than the best price (as percentage)
+    pub total_cost: Decimal,    // Total amount you'd pay/receive
+    pub size_filled: Decimal,   // How much of your order got filled
 }
 
 /// Thread-safe order book manager
@@ -685,10 +679,19 @@ impl OrderBookManager {
         }
     }
 
+    pub fn is_exist(&self, token_id: &str) -> Result<bool> {
+        let books = self
+            .books
+            .read()
+            .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
+        Ok(books.contains_key(token_id))
+    }
+
     /// Get or create an order book for a token
     /// If we don't have a book for this token yet, create a new empty one
     pub fn get_or_create_book(&self, token_id: &str) -> Result<OrderBook> {
-        let mut books = self.books
+        let mut books = self
+            .books
             .write()
             .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
 
@@ -705,19 +708,18 @@ impl OrderBookManager {
     /// Update a book with a delta
     /// This is called when we receive real-time updates from the exchange
     pub fn apply_delta(&self, delta: OrderDelta) -> Result<()> {
-        let mut books = self.books
+        let mut books = self
+            .books
             .write()
             .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
 
         // Find the book for this token (must already exist)
-        let book = books
-            .get_mut(&delta.token_id)
-            .ok_or_else(|| {
-                PolyfillError::market_data(
-                    format!("No book found for token: {}", delta.token_id),
-                    crate::errors::MarketDataErrorKind::TokenNotFound
-                )
-            })?;
+        let book = books.get_mut(&delta.token_id).ok_or_else(|| {
+            PolyfillError::market_data(
+                format!("No book found for token: {}", delta.token_id),
+                crate::errors::MarketDataErrorKind::TokenNotFound,
+            )
+        })?;
 
         // Apply the update to the specific book
         book.apply_delta(delta)
@@ -726,7 +728,8 @@ impl OrderBookManager {
     /// Get a book snapshot
     /// Returns a copy of the current book state that won't change
     pub fn get_book(&self, token_id: &str) -> Result<crate::types::OrderBook> {
-        let books = self.books
+        let books = self
+            .books
             .read()
             .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
 
@@ -736,7 +739,7 @@ impl OrderBookManager {
             .ok_or_else(|| {
                 PolyfillError::market_data(
                     format!("No book found for token: {}", token_id),
-                    crate::errors::MarketDataErrorKind::TokenNotFound
+                    crate::errors::MarketDataErrorKind::TokenNotFound,
                 )
             })
     }
@@ -744,23 +747,20 @@ impl OrderBookManager {
     /// Get all available books
     /// Returns snapshots of every book we're currently tracking
     pub fn get_all_books(&self) -> Result<Vec<crate::types::OrderBook>> {
-        let books = self.books
+        let books = self
+            .books
             .read()
             .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
 
-        Ok(
-            books
-                .values()
-                .map(|book| book.snapshot())
-                .collect()
-        )
+        Ok(books.values().map(|book| book.snapshot()).collect())
     }
 
     /// Remove stale books
     /// Cleans up books that haven't been updated recently (probably disconnected)
     /// This prevents memory leaks from accumulating dead books
     pub fn cleanup_stale_books(&self, max_age: std::time::Duration) -> Result<usize> {
-        let mut books = self.books
+        let mut books = self
+            .books
             .write()
             .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
 
@@ -782,13 +782,13 @@ impl OrderBookManager {
 pub struct BookAnalytics {
     pub token_id: String,
     pub timestamp: chrono::DateTime<Utc>,
-    pub bid_count: usize, // How many different bid price levels
-    pub ask_count: usize, // How many different ask price levels
-    pub total_bid_size: Decimal, // Total size of all bids combined
-    pub total_ask_size: Decimal, // Total size of all asks combined
-    pub spread: Option<Decimal>, // Current spread (ask - bid)
+    pub bid_count: usize,            // How many different bid price levels
+    pub ask_count: usize,            // How many different ask price levels
+    pub total_bid_size: Decimal,     // Total size of all bids combined
+    pub total_ask_size: Decimal,     // Total size of all asks combined
+    pub spread: Option<Decimal>,     // Current spread (ask - bid)
     pub spread_pct: Option<Decimal>, // Spread as percentage
-    pub mid_price: Option<Decimal>, // Current mid price
+    pub mid_price: Option<Decimal>,  // Current mid price
     pub volatility: Option<Decimal>, // Price volatility (if calculated)
 }
 
@@ -878,7 +878,8 @@ mod tests {
             price: dec!(0.5),
             size: dec!(100),
             sequence: 1,
-        }).unwrap();
+        })
+        .unwrap();
 
         // Add an ask at $0.52
         book.apply_delta(OrderDelta {
@@ -888,7 +889,8 @@ mod tests {
             price: dec!(0.52),
             size: dec!(100),
             sequence: 2,
-        }).unwrap();
+        })
+        .unwrap();
 
         let spread = book.spread().unwrap();
         assert_eq!(spread, dec!(0.02)); // $0.52 - $0.50 = $0.02
@@ -909,7 +911,8 @@ mod tests {
                 price: *price,
                 size: dec!(100),
                 sequence: (i as u64) + 1,
-            }).unwrap();
+            })
+            .unwrap();
         }
 
         // Try to buy 150 tokens (will need to hit multiple price levels)
@@ -925,7 +928,7 @@ mod tests {
         // Test adding a bid
         book.apply_bid_delta(
             Decimal::from_str("0.75").unwrap(),
-            Decimal::from_str("100.0").unwrap()
+            Decimal::from_str("100.0").unwrap(),
         );
 
         let best_bid = book.best_bid();
@@ -937,7 +940,7 @@ mod tests {
         // Test updating the bid
         book.apply_bid_delta(
             Decimal::from_str("0.75").unwrap(),
-            Decimal::from_str("150.0").unwrap()
+            Decimal::from_str("150.0").unwrap(),
         );
         let updated_bid = book.best_bid().unwrap();
         assert_eq!(updated_bid.size, Decimal::from_str("150.0").unwrap());
@@ -954,7 +957,7 @@ mod tests {
         // Test adding an ask
         book.apply_ask_delta(
             Decimal::from_str("0.76").unwrap(),
-            Decimal::from_str("50.0").unwrap()
+            Decimal::from_str("50.0").unwrap(),
         );
 
         let best_ask = book.best_ask();
@@ -966,7 +969,7 @@ mod tests {
         // Test updating the ask
         book.apply_ask_delta(
             Decimal::from_str("0.76").unwrap(),
-            Decimal::from_str("75.0").unwrap()
+            Decimal::from_str("75.0").unwrap(),
         );
         let updated_ask = book.best_ask().unwrap();
         assert_eq!(updated_ask.size, Decimal::from_str("75.0").unwrap());
@@ -983,19 +986,19 @@ mod tests {
         // Build order book using legacy methods
         book.apply_bid_delta(
             Decimal::from_str("0.75").unwrap(),
-            Decimal::from_str("100.0").unwrap()
+            Decimal::from_str("100.0").unwrap(),
         );
         book.apply_bid_delta(
             Decimal::from_str("0.74").unwrap(),
-            Decimal::from_str("50.0").unwrap()
+            Decimal::from_str("50.0").unwrap(),
         );
         book.apply_ask_delta(
             Decimal::from_str("0.76").unwrap(),
-            Decimal::from_str("80.0").unwrap()
+            Decimal::from_str("80.0").unwrap(),
         );
         book.apply_ask_delta(
             Decimal::from_str("0.77").unwrap(),
-            Decimal::from_str("120.0").unwrap()
+            Decimal::from_str("120.0").unwrap(),
         );
 
         // Test liquidity at specific price - when buying, we look at ask liquidity
@@ -1003,17 +1006,15 @@ mod tests {
         assert_eq!(buy_liquidity, Decimal::from_str("80.0").unwrap());
 
         // Test liquidity at specific price - when selling, we look at bid liquidity
-        let sell_liquidity = book.liquidity_at_price(
-            Decimal::from_str("0.75").unwrap(),
-            Side::SELL
-        );
+        let sell_liquidity =
+            book.liquidity_at_price(Decimal::from_str("0.75").unwrap(), Side::SELL);
         assert_eq!(sell_liquidity, Decimal::from_str("100.0").unwrap());
 
         // Test liquidity in range - when buying, we look at ask liquidity in range
         let buy_range_liquidity = book.liquidity_in_range(
             Decimal::from_str("0.74").unwrap(),
             Decimal::from_str("0.77").unwrap(),
-            Side::BUY
+            Side::BUY,
         );
         // Should include ask liquidity: 80 (0.76 ask) + 120 (0.77 ask) = 200
         assert_eq!(buy_range_liquidity, Decimal::from_str("200.0").unwrap());
@@ -1022,7 +1023,7 @@ mod tests {
         let sell_range_liquidity = book.liquidity_in_range(
             Decimal::from_str("0.74").unwrap(),
             Decimal::from_str("0.77").unwrap(),
-            Side::SELL
+            Side::SELL,
         );
         // Should include bid liquidity: 50 (0.74 bid) + 100 (0.75 bid) = 150
         assert_eq!(sell_range_liquidity, Decimal::from_str("150.0").unwrap());
@@ -1038,18 +1039,18 @@ mod tests {
         // Add normal levels
         book.apply_bid_delta(
             Decimal::from_str("0.75").unwrap(),
-            Decimal::from_str("100.0").unwrap()
+            Decimal::from_str("100.0").unwrap(),
         );
         book.apply_ask_delta(
             Decimal::from_str("0.76").unwrap(),
-            Decimal::from_str("80.0").unwrap()
+            Decimal::from_str("80.0").unwrap(),
         );
         assert!(book.is_valid());
 
         // Create crossed book (invalid) - bid higher than ask
         book.apply_bid_delta(
             Decimal::from_str("0.77").unwrap(),
-            Decimal::from_str("50.0").unwrap()
+            Decimal::from_str("50.0").unwrap(),
         );
         assert!(!book.is_valid());
     }
@@ -1064,7 +1065,7 @@ mod tests {
         // Add some data
         book.apply_bid_delta(
             Decimal::from_str("0.75").unwrap(),
-            Decimal::from_str("100.0").unwrap()
+            Decimal::from_str("100.0").unwrap(),
         );
         assert!(!book.is_stale(Duration::from_secs(60)));
 
@@ -1079,28 +1080,28 @@ mod tests {
         // Add multiple levels
         book.apply_bid_delta(
             Decimal::from_str("0.75").unwrap(),
-            Decimal::from_str("100.0").unwrap()
+            Decimal::from_str("100.0").unwrap(),
         );
         book.apply_bid_delta(
             Decimal::from_str("0.74").unwrap(),
-            Decimal::from_str("50.0").unwrap()
+            Decimal::from_str("50.0").unwrap(),
         );
         book.apply_bid_delta(
             Decimal::from_str("0.73").unwrap(),
-            Decimal::from_str("20.0").unwrap()
+            Decimal::from_str("20.0").unwrap(),
         );
 
         book.apply_ask_delta(
             Decimal::from_str("0.76").unwrap(),
-            Decimal::from_str("80.0").unwrap()
+            Decimal::from_str("80.0").unwrap(),
         );
         book.apply_ask_delta(
             Decimal::from_str("0.77").unwrap(),
-            Decimal::from_str("40.0").unwrap()
+            Decimal::from_str("40.0").unwrap(),
         );
         book.apply_ask_delta(
             Decimal::from_str("0.78").unwrap(),
-            Decimal::from_str("30.0").unwrap()
+            Decimal::from_str("30.0").unwrap(),
         );
 
         // Should have levels on each side
@@ -1111,8 +1112,14 @@ mod tests {
         assert!(asks.len() <= 3);
 
         // Best levels should be there
-        assert_eq!(book.best_bid().unwrap().price, Decimal::from_str("0.75").unwrap());
-        assert_eq!(book.best_ask().unwrap().price, Decimal::from_str("0.76").unwrap());
+        assert_eq!(
+            book.best_bid().unwrap().price,
+            Decimal::from_str("0.75").unwrap()
+        );
+        assert_eq!(
+            book.best_ask().unwrap().price,
+            Decimal::from_str("0.76").unwrap()
+        );
     }
 
     #[test]
@@ -1122,11 +1129,11 @@ mod tests {
         // Test using legacy methods which call fast operations internally
         book.apply_bid_delta(
             Decimal::from_str("0.75").unwrap(),
-            Decimal::from_str("100.0").unwrap()
+            Decimal::from_str("100.0").unwrap(),
         );
         book.apply_ask_delta(
             Decimal::from_str("0.76").unwrap(),
-            Decimal::from_str("80.0").unwrap()
+            Decimal::from_str("80.0").unwrap(),
         );
 
         let best_bid_fast = book.best_bid_fast();
