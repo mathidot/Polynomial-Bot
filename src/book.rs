@@ -774,6 +774,17 @@ impl OrderBookManager {
 
         Ok(removed)
     }
+
+    /// Insert order book
+    /// If there has already exists a book, just replace it
+    pub fn insert(&mut self, book: OrderBook) -> Result<()> {
+        let mut books = self
+            .books
+            .write()
+            .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
+        books.insert(book.token_id.clone(), book);
+        Ok(())
+    }
 }
 
 /// Order book analytics and statistics

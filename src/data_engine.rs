@@ -8,15 +8,14 @@ use crate::types::{
     BookMessage, OrderDelta, StreamMessage, WssAuth, WssChannelType, WssSubscription,
 };
 use anyhow::anyhow;
-use chrono::Datelike;
 use chrono::Utc;
+use chrono::{DateTime, Datelike};
 use dashmap::{DashMap, DashSet};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{Sink, SinkExt, Stream, StreamExt, future};
 use polyfill_rs::{ClobClient, PolyfillError, book, crypto};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::env::consts::FAMILY;
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
@@ -167,7 +166,7 @@ pub struct DataEngine {
     subscribe_read_stream: DashMap<WssChannelType, Arc<Mutex<SplitStream<WebSocketStream>>>>,
     // mock_subscribe_write_stream: DashMap<WssChannelType, Arc<Mutex<SplitSink<MockStream, Value>>>>,
     // mock_subscribe_read_stream: DashMap<WssChannelType, Arc<Mutex<SplitStream<MockStream>>>>,
-    book_manager: OrderBookManager,
+    book_manager: Arc<std::sync::Mutex<OrderBookManager>>,
     message_handles: HashMap<std::mem::Discriminant<StreamMessage>, MessageHandler>,
 }
 
@@ -206,7 +205,7 @@ impl DataEngine {
             subscribe_tx: Arc::new(Mutex::new(tx)),
             subscribe_write_stream,
             subscribe_read_stream,
-            book_manager: OrderBookManager::new(100),
+            book_manager: Arc::new(std::sync::Mutex::new(OrderBookManager::new(100))),
             message_handles: message_handles,
         }
     }
@@ -256,29 +255,6 @@ impl DataEngine {
             if let Some(token) = self.subscribe_rx.lock().await.recv().await {
                 if !self.subscribe_tokens.contains(&token.token_id) {
                     let engine = Arc::clone(&self);
-
-                    // tokio::spawn(async move {
-                    //     let auth = WssAuth {
-                    //         address: "your_eth_address".to_string(),
-                    //         signature: "your_signature".to_string(),
-                    //         timestamp: chrono::Utc::now().timestamp() as u64,
-                    //         nonce: "random_nonce".to_string(),
-                    //     };
-                    //     let mut stream = WebSocketStream::new(WEBSOCKET_MARKET_URL);
-                    //     stream = stream.with_auth(auth.clone());
-                    //     if let Ok(_) = stream
-                    //         .subscribe_market_channel(vec![token.token_id.clone()])
-                    //         .await
-                    //     {
-                    //         println!("subscribe token successfully");
-                    //     } else {
-                    //         println!("fail to subscribe token")
-                    //     }
-                    //     while let Some(message) = stream.next().await {
-                    //         dbg!(message);
-                    //     }
-                    // });
-
                     tokio::spawn(async move {
                         if let Err(e) = engine.subscribe_token(token).await {
                             eprintln!("fail to subscribe: {}", e);
@@ -290,7 +266,10 @@ impl DataEngine {
     }
 
     async fn subscribe_token(&self, token: Token) -> Result<()> {
-        if let Ok(_) = self.book_manager.get_book(&token.token_id) {
+        let book_manager = self.book_manager.lock().map_err(|e| PolyfillError::)
+
+        if let Ok(_) = self.book_manager.lock().map_err(|e| PolyfillError::P)
+        get_book(&token.token_id) {
             return Ok(());
         }
 
@@ -323,58 +302,79 @@ impl DataEngine {
         }
     }
 
-    fn handle_book_message(&mut self, book: BookMessage) -> Result<()> {
-        if self.book_manager.is_exist(&book.asset_id)? {
+    fn handle_book_message(&self, book: BookMessage) -> Result<()> {
+        if self.book_manager.lock().is_exist(&book.asset_id)? {
             return Ok(());
         }
-
-        let order_book = OrderBook::new(book.asset_id, 100);
-        for bid in book.bids {}
-
-        for ask in book.asks {}
-
+        let token_id = book.asset_id.clone();
+        let mut order_book = OrderBook::new(token_id.clone(), 100);
+        for bid in book.bids {
+            let delta = OrderDelta {
+                token_id: token_id.clone(),
+                timestamp: DateTime::from_timestamp_millis(book.timestamp as i64)
+                    .unwrap_or(Utc::now()),
+                side: crate::types::Side::BUY,
+                price: bid.price,
+                size: bid.size,
+                sequence: 0,
+            };
+            order_book.apply_delta(delta)?;
+        }
+        for ask in book.asks {
+            let delta = OrderDelta {
+                token_id: token_id.clone(),
+                timestamp: DateTime::from_timestamp_millis(book.timestamp as i64)
+                    .unwrap_or(Utc::now()),
+                side: crate::types::Side::SELL,
+                price: ask.price,
+                size: ask.size,
+                sequence: 0,
+            };
+            order_book.apply_delta(delta)?;
+        }
+        self.book_manager.insert(order_book)?;
         Ok(())
     }
 
     async fn handle_message(&self) -> Result<()> {
-        if let Some(crypto_stream) = self.subscribe_read_stream.get_mut(&WssChannelType::Crypto) {
-            let mut lock = crypto_stream.lock().await;
-            while let Some(Ok(message)) = lock.next().await {
-                match message.clone() {
-                    StreamMessage::Book(book) => {
-                        println!("receive book: {:?}", book);
-                    }
-                    StreamMessage::PriceChange(price_change) => {
-                        println!("receive price change: {:?}", price_change);
-                    }
-                    StreamMessage::TickSizeChange(tick_size_change) => {
-                        println!("receive tick size change: {:?}", tick_size_change);
-                    }
-                    StreamMessage::LastTradePrice(last_trade_price) => {
-                        println!("receive last trade price: {:?}", last_trade_price);
-                    }
-                    StreamMessage::BestBidAsk(best_bid_ask) => {
-                        println!("receive best bid ask: {:?}", best_bid_ask);
-                    }
-                    StreamMessage::NewMarket(new_market) => {
-                        println!("receive new market: {:?}", new_market);
-                    }
-                    StreamMessage::MarketResolved(market_resolved) => {
-                        println!("receive market resolved: {:?}", market_resolved);
-                    }
-                    StreamMessage::Trade(trade) => {
-                        println!("receive trade: {:?}", trade);
-                    }
-                    StreamMessage::Order(order) => {
-                        println!("receive order: {:?}", order);
-                    }
-                    _ => {}
+        let crypto_stream = match self.subscribe_read_stream.get_mut(&WssChannelType::Crypto) {
+            Some(stream) => stream.clone(),
+            None => return Err(anyhow!("No stream found for crypto stream").into()),
+        };
+        let mut lock = crypto_stream.lock().await;
+        while let Some(Ok(message)) = lock.next().await {
+            match message.clone() {
+                StreamMessage::Book(book) => {
+                    self.handle_book_message(book);
                 }
+                StreamMessage::PriceChange(price_change) => {
+                    println!("receive price change: {:?}", price_change);
+                }
+                StreamMessage::TickSizeChange(tick_size_change) => {
+                    println!("receive tick size change: {:?}", tick_size_change);
+                }
+                StreamMessage::LastTradePrice(last_trade_price) => {
+                    println!("receive last trade price: {:?}", last_trade_price);
+                }
+                StreamMessage::BestBidAsk(best_bid_ask) => {
+                    println!("receive best bid ask: {:?}", best_bid_ask);
+                }
+                StreamMessage::NewMarket(new_market) => {
+                    println!("receive new market: {:?}", new_market);
+                }
+                StreamMessage::MarketResolved(market_resolved) => {
+                    println!("receive market resolved: {:?}", market_resolved);
+                }
+                StreamMessage::Trade(trade) => {
+                    println!("receive trade: {:?}", trade);
+                }
+                StreamMessage::Order(order) => {
+                    println!("receive order: {:?}", order);
+                }
+                _ => {}
             }
-            return Ok(());
-        } else {
-            return Err(anyhow!("No stream found for crypto stream").into());
         }
+        Ok(())
     }
 
     pub fn start(self: Arc<Self>) {
@@ -432,6 +432,7 @@ impl DataEngine {
         return slugs;
     }
 
+    #[allow(dead_code)]
     async fn get_specified_tag_ids(
         &mut self,
         filtered_list: Option<HashSet<String>>,
