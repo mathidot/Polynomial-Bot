@@ -5,7 +5,8 @@ use crate::common::{
 };
 use crate::stream::{MockStream, WebSocketStream};
 use crate::types::{
-    BookMessage, OrderDelta, PriceChange, StreamMessage, WssAuth, WssChannelType, WssSubscription,
+    BookMessage, OrderDelta, PriceChange, PriceChangeMessage, StreamMessage, WssAuth,
+    WssChannelType, WssSubscription,
 };
 use anyhow::anyhow;
 use chrono::Utc;
@@ -301,7 +302,7 @@ impl DataEngine {
             let manager_guard = self
                 .book_manager
                 .lock()
-                .map_err(|e| PolyfillError::internal_simple("fail to get book"))?;
+                .map_err(|_| PolyfillError::internal_simple("fail to get book"))?;
             if manager_guard.is_exist(&book.asset_id)? {
                 return Ok(());
             }
@@ -341,7 +342,8 @@ impl DataEngine {
         Ok(())
     }
 
-    fn on_price_change(&self, book: PriceChange) -> Result<()> {
+    fn on_price_change(&self, price_changes: PriceChangeMessage) -> Result<()> {
+        for price_change in price_changes.price_changes {}
         Ok(())
     }
 
