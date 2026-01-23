@@ -6,6 +6,7 @@ pub mod context;
 pub mod data_engine;
 pub mod errors;
 pub mod rand;
+pub mod state;
 pub mod stream;
 pub mod types;
 pub mod utils;
