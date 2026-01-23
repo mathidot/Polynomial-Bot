@@ -5,7 +5,7 @@ use crate::common::{
 };
 use crate::stream::{MockStream, WebSocketStream};
 use crate::types::{
-    BookMessage, OrderDelta, StreamMessage, WssAuth, WssChannelType, WssSubscription,
+    BookMessage, OrderDelta, PriceChange, StreamMessage, WssAuth, WssChannelType, WssSubscription,
 };
 use anyhow::anyhow;
 use chrono::Utc;
@@ -266,13 +266,6 @@ impl DataEngine {
     }
 
     async fn subscribe_token(&self, token: Token) -> Result<()> {
-        let book_manager = self.book_manager.lock().map_err(|e| PolyfillError::)
-
-        if let Ok(_) = self.book_manager.lock().map_err(|e| PolyfillError::P)
-        get_book(&token.token_id) {
-            return Ok(());
-        }
-
         let chan_type = match token.token_type {
             TokenType::CRYPTO => WssChannelType::Crypto,
             TokenType::SPORTS => WssChannelType::Sports,
@@ -302,11 +295,17 @@ impl DataEngine {
         }
     }
 
-    fn handle_book_message(&self, book: BookMessage) -> Result<()> {
-        if self.book_manager.lock().is_exist(&book.asset_id)? {
-            return Ok(());
-        }
+    fn on_book(&self, book: BookMessage) -> Result<()> {
         let token_id = book.asset_id.clone();
+        {
+            let manager_guard = self
+                .book_manager
+                .lock()
+                .map_err(|e| PolyfillError::internal_simple("fail to get book"))?;
+            if manager_guard.is_exist(&book.asset_id)? {
+                return Ok(());
+            }
+        }
         let mut order_book = OrderBook::new(token_id.clone(), 100);
         for bid in book.bids {
             let delta = OrderDelta {
@@ -332,7 +331,17 @@ impl DataEngine {
             };
             order_book.apply_delta(delta)?;
         }
-        self.book_manager.insert(order_book)?;
+        {
+            let mut manager_guard = self
+                .book_manager
+                .lock()
+                .map_err(|_| PolyfillError::internal_simple("fail to get book"))?;
+            manager_guard.insert(order_book)?;
+        }
+        Ok(())
+    }
+
+    fn on_price_change(&self, book: PriceChange) -> Result<()> {
         Ok(())
     }
 
@@ -345,7 +354,10 @@ impl DataEngine {
         while let Some(Ok(message)) = lock.next().await {
             match message.clone() {
                 StreamMessage::Book(book) => {
-                    self.handle_book_message(book);
+                    if let Err(_) = self.on_book(book) {
+                        tracing::error!("fail to handle book message");
+                        continue;
+                    }
                 }
                 StreamMessage::PriceChange(price_change) => {
                     println!("receive price change: {:?}", price_change);
