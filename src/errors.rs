@@ -49,9 +49,7 @@ pub enum PolyfillError {
 
     /// Configuration errors
     #[error("Config error: {message}")]
-    Config {
-        message: String,
-    },
+    Config { message: String },
 
     /// Parsing/serialization errors
     #[error("Parse error: {message}")]
@@ -95,6 +93,13 @@ pub enum PolyfillError {
         message: String,
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+
+    #[error("HTTP error: {message}")]
+    Http {
+        message: String,
+        #[source]
+        source: Option<reqwest::Error>,
     },
 }
 
@@ -155,7 +160,10 @@ impl PolyfillError {
             PolyfillError::Timeout { .. } => true,
             PolyfillError::RateLimit { .. } => true,
             PolyfillError::Stream { kind, .. } => {
-                matches!(kind, StreamErrorKind::ConnectionLost | StreamErrorKind::Reconnecting)
+                matches!(
+                    kind,
+                    StreamErrorKind::ConnectionLost | StreamErrorKind::Reconnecting
+                )
             }
             _ => false,
         }
@@ -166,7 +174,11 @@ impl PolyfillError {
         match self {
             PolyfillError::Network { .. } => Some(Duration::from_millis(100)),
             PolyfillError::Api { status, .. } => {
-                if *status >= 500 { Some(Duration::from_millis(500)) } else { None }
+                if *status >= 500 {
+                    Some(Duration::from_millis(500))
+                } else {
+                    None
+                }
             }
             PolyfillError::Timeout { .. } => Some(Duration::from_millis(50)),
             PolyfillError::RateLimit { retry_after, .. } => {
@@ -205,6 +217,7 @@ impl PolyfillError {
             PolyfillError::Stream { .. } => "stream",
             PolyfillError::Validation { .. } => "validation",
             PolyfillError::Internal { .. } => "internal",
+            PolyfillError::Http { .. } => "http",
         }
     }
 }
@@ -213,7 +226,7 @@ impl PolyfillError {
 impl PolyfillError {
     pub fn network<E: std::error::Error + Send + Sync + 'static>(
         message: impl Into<String>,
-        source: E
+        source: E,
     ) -> Self {
         Self::Network {
             message: message.into(),
@@ -265,7 +278,7 @@ impl PolyfillError {
 
     pub fn parse(
         message: impl Into<String>,
-        source: Option<Box<dyn std::error::Error + Send + Sync>>
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
     ) -> Self {
         Self::Parse {
             message: message.into(),
@@ -303,7 +316,7 @@ impl PolyfillError {
 
     pub fn internal<E: std::error::Error + Send + Sync + 'static>(
         message: impl Into<String>,
-        source: E
+        source: E,
     ) -> Self {
         Self::Internal {
             message: message.into(),
@@ -365,70 +378,81 @@ impl From<tokio_tungstenite::tungstenite::Error> for PolyfillError {
     }
 }
 
+impl From<reqwest::Error> for PolyfillError {
+    fn from(err: reqwest::Error) -> Self {
+        PolyfillError::Http {
+            message: err.to_string(),
+            source: Some(err),
+        }
+    }
+}
+
 // Manual Clone implementation since Box<dyn Error> doesn't implement Clone
 impl Clone for PolyfillError {
     fn clone(&self) -> Self {
         match self {
-            PolyfillError::Network { message, source: _ } =>
-                PolyfillError::Network {
-                    message: message.clone(),
-                    source: None,
-                },
-            PolyfillError::Api { status, message, error_code } =>
-                PolyfillError::Api {
-                    status: *status,
-                    message: message.clone(),
-                    error_code: error_code.clone(),
-                },
-            PolyfillError::Auth { message, kind } =>
-                PolyfillError::Auth {
-                    message: message.clone(),
-                    kind: kind.clone(),
-                },
-            PolyfillError::Order { message, kind } =>
-                PolyfillError::Order {
-                    message: message.clone(),
-                    kind: kind.clone(),
-                },
-            PolyfillError::MarketData { message, kind } =>
-                PolyfillError::MarketData {
-                    message: message.clone(),
-                    kind: kind.clone(),
-                },
-            PolyfillError::Config { message } =>
-                PolyfillError::Config {
-                    message: message.clone(),
-                },
-            PolyfillError::Parse { message, source: _ } =>
-                PolyfillError::Parse {
-                    message: message.clone(),
-                    source: None,
-                },
-            PolyfillError::Timeout { duration, operation } =>
-                PolyfillError::Timeout {
-                    duration: *duration,
-                    operation: operation.clone(),
-                },
-            PolyfillError::RateLimit { message, retry_after } =>
-                PolyfillError::RateLimit {
-                    message: message.clone(),
-                    retry_after: *retry_after,
-                },
-            PolyfillError::Stream { message, kind } =>
-                PolyfillError::Stream {
-                    message: message.clone(),
-                    kind: kind.clone(),
-                },
-            PolyfillError::Validation { message, field } =>
-                PolyfillError::Validation {
-                    message: message.clone(),
-                    field: field.clone(),
-                },
-            PolyfillError::Internal { message, source: _ } =>
-                PolyfillError::Internal {
-                    message: message.clone(),
-                    source: None,
-                },
+            PolyfillError::Network { message, source: _ } => PolyfillError::Network {
+                message: message.clone(),
+                source: None,
+            },
+            PolyfillError::Api {
+                status,
+                message,
+                error_code,
+            } => PolyfillError::Api {
+                status: *status,
+                message: message.clone(),
+                error_code: error_code.clone(),
+            },
+            PolyfillError::Auth { message, kind } => PolyfillError::Auth {
+                message: message.clone(),
+                kind: kind.clone(),
+            },
+            PolyfillError::Order { message, kind } => PolyfillError::Order {
+                message: message.clone(),
+                kind: kind.clone(),
+            },
+            PolyfillError::MarketData { message, kind } => PolyfillError::MarketData {
+                message: message.clone(),
+                kind: kind.clone(),
+            },
+            PolyfillError::Config { message } => PolyfillError::Config {
+                message: message.clone(),
+            },
+            PolyfillError::Parse { message, source: _ } => PolyfillError::Parse {
+                message: message.clone(),
+                source: None,
+            },
+            PolyfillError::Timeout {
+                duration,
+                operation,
+            } => PolyfillError::Timeout {
+                duration: *duration,
+                operation: operation.clone(),
+            },
+            PolyfillError::RateLimit {
+                message,
+                retry_after,
+            } => PolyfillError::RateLimit {
+                message: message.clone(),
+                retry_after: *retry_after,
+            },
+            PolyfillError::Stream { message, kind } => PolyfillError::Stream {
+                message: message.clone(),
+                kind: kind.clone(),
+            },
+            PolyfillError::Validation { message, field } => PolyfillError::Validation {
+                message: message.clone(),
+                field: field.clone(),
+            },
+            PolyfillError::Internal { message, source: _ } => PolyfillError::Internal {
+                message: message.clone(),
+                source: None,
+            },
+            PolyfillError::Http { message, source } => PolyfillError::Http {
+                message: message.clone(),
+                source: None,
+            },
         }
     }
 }

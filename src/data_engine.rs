@@ -1,20 +1,20 @@
+use crate::ClobClient;
 use crate::book::{OrderBook, OrderBookManager};
 use crate::common::{
-    CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, Result, SLUG_URL, SPORT_URL, Token, TokenType,
+    CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, SLUG_URL, SPORT_URL, Token, TokenType,
     WEBSOCKET_MARKET_URL,
 };
+use crate::errors::{PolyfillError, Result, StreamErrorKind};
 use crate::stream::{MockStream, WebSocketStream};
 use crate::types::{
     BookMessage, OrderDelta, PriceChange, PriceChangeMessage, StreamMessage, WssAuth,
     WssChannelType, WssSubscription,
 };
-use anyhow::anyhow;
 use chrono::Utc;
 use chrono::{DateTime, Datelike};
 use dashmap::{DashMap, DashSet};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{Sink, SinkExt, Stream, StreamExt, future};
-use polyfill_rs::{ClobClient, PolyfillError, book, crypto};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
@@ -46,7 +46,10 @@ impl TokenApi for ClobClient {
         let ret = response
             .json::<Value>()
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e));
+            .map_err(|e| PolyfillError::Parse {
+                message: e.to_string(),
+                source: Some(Box::new(e)),
+            });
         ret
     }
 
@@ -105,9 +108,10 @@ impl TokenApi for ClobClient {
             .json()
             .await?;
 
-        let markets = resp_json
-            .as_object()
-            .ok_or_else(|| anyhow!("expect markets data but got nothing"))?;
+        let markets = resp_json.as_object().ok_or_else(|| PolyfillError::Parse {
+            message: "fail to parse markets_json".to_string(),
+            source: None,
+        })?;
         let market_ids: Vec<String> = markets
             .get("markets")
             .and_then(|m: &Value| m.as_array())
@@ -131,12 +135,10 @@ impl TokenApi for ClobClient {
             .await
             .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?;
 
-        response.json::<Market>().await.map_err(|e| {
-            anyhow::anyhow!(PolyfillError::parse(
-                format!("Failed to parse response: {}", e),
-                None
-            ))
-        })
+        response
+            .json::<Market>()
+            .await
+            .map_err(|e| PolyfillError::parse(format!("Failed to parse response: {}", e), None))
     }
 }
 
@@ -277,23 +279,25 @@ impl DataEngine {
             .get(&chan_type)
             .map(|r| r.value().clone());
 
-        if let Some(stream_mutex) = target_stream {
-            {
-                let mut stream = stream_mutex.lock().await;
-                let token_subscription = WssSubscription {
-                    channel_type: "market".to_string(),
-                    asset_ids: vec![token.token_id.to_string()],
-                    operation: Some("subscribe".to_string()),
-                    auth: None,
-                };
-                stream
-                    .send(serde_json::to_value(token_subscription)?)
-                    .await?;
-            }
-            Ok(())
-        } else {
-            Err(anyhow!("No stream found for {:?}", chan_type).into())
+        if target_stream.is_none() {
+            return Err(PolyfillError::stream(
+                "cannot find target stream",
+                StreamErrorKind::SubscriptionFailed,
+            ));
         }
+
+        let stream_mutex = target_stream.unwrap();
+        let mut stream = stream_mutex.lock().await;
+        let token_subscription = WssSubscription {
+            channel_type: "market".to_string(),
+            asset_ids: vec![token.token_id.to_string()],
+            operation: Some("subscribe".to_string()),
+            auth: None,
+        };
+        stream
+            .send(serde_json::to_value(token_subscription)?)
+            .await?;
+        Ok(())
     }
 
     fn on_book(&self, book: BookMessage) -> Result<()> {
@@ -350,7 +354,12 @@ impl DataEngine {
     async fn handle_message(&self) -> Result<()> {
         let crypto_stream = match self.subscribe_read_stream.get_mut(&WssChannelType::Crypto) {
             Some(stream) => stream.clone(),
-            None => return Err(anyhow!("No stream found for crypto stream").into()),
+            None => {
+                return Err(PolyfillError::Stream {
+                    message: "cannot find target stream".to_string(),
+                    kind: StreamErrorKind::SubscriptionFailed,
+                });
+            }
         };
         let mut lock = crypto_stream.lock().await;
         while let Some(Ok(message)) = lock.next().await {
@@ -462,8 +471,11 @@ impl DataEngine {
         ]);
 
         let val = self.client.get_events_by_params(params).await?;
-        let events: Vec<String> = serde_json::from_value(val)
-            .map_err(|e| anyhow::anyhow!("here should be string of vec [{}]", e))?;
+        let events: Vec<String> =
+            serde_json::from_value(val).map_err(|e| PolyfillError::Parse {
+                message: "fail to parse events params".to_string(),
+                source: None,
+            })?;
         println!("{:?}", events);
         Ok(events)
     }

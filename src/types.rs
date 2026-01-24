@@ -701,7 +701,7 @@ pub struct BookMessage {
     pub asset_id: String,
     pub market: String,
     pub hash: String,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub timestamp: u64,
     pub bids: Vec<OrderSummary>,
     pub asks: Vec<OrderSummary>,
@@ -738,7 +738,7 @@ pub struct PriceChange {
 pub struct PriceChangeMessage {
     pub market: String,
     pub price_changes: Vec<PriceChange>,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub timestamp: u64,
 }
 
@@ -754,7 +754,7 @@ pub struct TickSizeChangeMessage {
     #[serde(with = "rust_decimal::serde::str")]
     pub new_tick_size: Decimal,
     pub side: String,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub timestamp: u64,
 }
 
@@ -771,7 +771,7 @@ pub struct LastTradePriceMessage {
     pub side: String,
     #[serde(with = "rust_decimal::serde::str")]
     pub size: Decimal,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub timestamp: u64,
 }
 
@@ -787,7 +787,7 @@ pub struct BestBidAskMessage {
     pub best_ask: Decimal,
     #[serde(with = "rust_decimal::serde::str")]
     pub spread: Decimal,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub timestamp: u64,
 }
 
@@ -812,7 +812,7 @@ pub struct NewMarketMessage {
     pub asset_ids: Vec<String>,
     pub outcomes: Vec<String>,
     pub event_message: EventMessage,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub timestamp: u64,
 }
 
@@ -830,7 +830,7 @@ pub struct MarketResolvedMessage {
     pub winning_asset_id: String,
     pub winning_outcome: String,
     pub event_message: EventMessage,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub timestamp: u64,
 }
 
@@ -842,11 +842,11 @@ pub struct MarketResolvedMessage {
 pub struct TradeMessage {
     pub asset_id: String,
     pub id: String,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub last_update: u64,
     pub maker_orders: Vec<MarketOrder>,
     pub market: String,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub matchtime: u64,
     pub outcome: String,
     pub owner: String,
@@ -895,7 +895,7 @@ pub struct OrderMessage {
     pub side: String,
     #[serde(with = "rust_decimal::serde::str")]
     pub size_matched: Decimal,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub timestamp: u64,
     #[serde(rename = "type")]
     pub order_type: String,
@@ -1077,11 +1077,11 @@ pub struct OpenOrder {
     #[serde(with = "rust_decimal::serde::str")]
     pub size_matched: Decimal,
     pub asset_id: String,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub expiration: u64,
     #[serde(rename = "type")]
     pub order_type: OrderType,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub created_at: u64,
 }
 
@@ -1232,7 +1232,7 @@ pub struct OrderBookSummary {
     pub market: String,
     pub asset_id: String,
     pub hash: String,
-    #[serde(deserialize_with = "polyfill_rs::decode::deserializers::number_from_string")]
+    #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub timestamp: u64,
     pub bids: Vec<OrderSummary>,
     pub asks: Vec<OrderSummary>,
@@ -1281,6 +1281,28 @@ pub struct Rewards {
     pub in_game_multiplier: Option<Decimal>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reward_epoch: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenInfo {
+    pub token_id: String,
+    pub side: Side,
+    pub price: Decimal,
+}
+
+impl TokenInfo {
+    pub fn new(id: String, side: Side, p: Decimal) -> Self {
+        Self {
+            token_id: id,
+            side,
+            price: p,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    pub enter_price: Decimal,
 }
 
 // For compatibility with reference implementation
