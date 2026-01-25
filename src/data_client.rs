@@ -4,10 +4,11 @@
 //! Polymarket, optimized for high-frequency trading environments.
 
 use crate::common::{
-    CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, Result, SLUG_URL, SPORT_URL, Token, TokenType,
+    CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, SLUG_URL, SPORT_URL, Token, TokenType,
     WEBSOCKET_MARKET_URL,
 };
 use crate::errors::PolyfillError;
+use crate::errors::Result;
 use anyhow::anyhow;
 use reqwest::Client;
 use serde_json::Value;
@@ -53,7 +54,10 @@ impl DataClient {
         let ret = response
             .json::<Value>()
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e));
+            .map_err(|_| PolyfillError::Parse {
+                message: "fail to parse event json".to_string(),
+                source: None,
+            });
         ret
     }
 
@@ -112,9 +116,10 @@ impl DataClient {
             .json()
             .await?;
 
-        let markets = resp_json
-            .as_object()
-            .ok_or_else(|| anyhow!("expect markets data but got nothing"))?;
+        let markets = resp_json.as_object().ok_or_else(|| PolyfillError::Parse {
+            message: "fail to parse markets json".to_string(),
+            source: None,
+        })?;
         let market_ids: Vec<String> = markets
             .get("markets")
             .and_then(|m: &Value| m.as_array())
@@ -138,11 +143,9 @@ impl DataClient {
             .await
             .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?;
 
-        response.json::<Market>().await.map_err(|e| {
-            anyhow::anyhow!(PolyfillError::parse(
-                format!("Failed to parse response: {}", e),
-                None
-            ))
-        })
+        response
+            .json::<Market>()
+            .await
+            .map_err(|e| PolyfillError::parse(format!("Failed to parse response: {}", e), None))
     }
 }

@@ -1,6 +1,6 @@
 use rust_decimal::Decimal;
-use serde::{ Deserialize, Serialize };
-use serde_with::{ json::JsonString, serde_as };
+use serde::{Deserialize, Serialize};
+use serde_with::{json::JsonString, serde_as};
 
 pub const EVENT_URL: &str = "https://gamma-api.polymarket.com/events";
 pub const SLUG_URL: &str = "https://gamma-api.polymarket.com/events/slug";
@@ -19,8 +19,6 @@ pub static CRYPTO_PATTERNS: &[&str] = &[
     "solana-above",
     "ethereum-up-or-down",
 ];
-
-pub type Result<T> = std::result::Result<T, anyhow::Error>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MarketType {

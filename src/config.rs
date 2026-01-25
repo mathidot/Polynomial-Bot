@@ -3,7 +3,9 @@
 //! This module contains contract addresses and configuration for different
 //! networks and environments.
 
+use serde::Deserialize;
 use std::collections::HashMap;
+use std::fs;
 
 /// Contract configuration for a specific network
 #[derive(Debug, Clone)]
@@ -147,9 +149,41 @@ impl Default for GlobalConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Config {
+    pub strategy: Strategy,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Strategy {
+    pub tail_eater: TailEaterStrategy,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct TailEaterStrategy {
+    pub buy_threshold: f64,
+    pub max_slippage: f64,
+}
+
+pub fn load_config() -> Config {
+    let content = std::fs::read_to_string("config.toml").expect("fail to read config");
+    let config: Config = toml::from_str(&content).expect("fail to parse TOML");
+    config
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_load_foncig() {
+        let config = load_config();
+        assert_eq!(config.strategy.tail_eater.buy_threshold, 0.98);
+        assert_eq!(config.strategy.tail_eater.max_slippage, 0.005);
+    }
 
     #[test]
     fn test_contract_config() {

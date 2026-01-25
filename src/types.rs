@@ -1300,11 +1300,6 @@ impl TokenInfo {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    pub enter_price: Decimal,
-}
-
 // For compatibility with reference implementation
 pub type ClientResult<T> = anyhow::Result<T>;
 

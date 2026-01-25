@@ -133,22 +133,14 @@ pub use crate::types::{
     WssSubscription,
 };
 
-// Re-export client
-pub use crate::client::{ClobClient, PolyfillClient};
-
-// Re-export compatibility types (for easy migration from polymarket-rs-client)
-pub use crate::client::OrderArgs;
-
-// Re-export error types
-pub use crate::errors::{PolyfillError, Result};
-
-// Re-export advanced components
 pub use crate::book::{OrderBook as OrderBookImpl, OrderBookManager};
+pub use crate::client::OrderArgs;
+pub use crate::client::{ClobClient, PolyfillClient};
 pub use crate::decode::Decoder;
+pub use crate::errors::{PolyfillError, Result};
 pub use crate::fill::{FillEngine, FillResult};
+pub use crate::state::GlobalState;
 pub use crate::stream::{MarketStream, StreamManager, WebSocketStream};
-
-// Re-export utilities
 pub use crate::utils::{crypto, math, rate_limit, retry, time, url};
 
 pub mod auth;
@@ -177,7 +169,7 @@ pub mod utils;
 pub mod prelude {
     pub use crate::book::{BookAnalytics, OrderBook, OrderBookManager};
     pub use crate::common::{
-        CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, Result, Token, WEBSOCKET_MARKET_URL,
+        CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, Token, WEBSOCKET_MARKET_URL,
     };
     pub use crate::stream::{MockStream, WebSocketStream};
     pub use crate::types::{StreamMessage, WssAuth, WssChannelType};

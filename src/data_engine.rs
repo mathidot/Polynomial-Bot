@@ -1,15 +1,16 @@
-use crate::ClobClient;
 use crate::book::{OrderBook, OrderBookManager};
 use crate::common::{
     CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, SLUG_URL, SPORT_URL, Token, TokenType,
     WEBSOCKET_MARKET_URL,
 };
 use crate::errors::{PolyfillError, Result, StreamErrorKind};
+use crate::state::GlobalState;
 use crate::stream::{MockStream, WebSocketStream};
 use crate::types::{
     BookMessage, OrderDelta, PriceChange, PriceChangeMessage, StreamMessage, WssAuth,
     WssChannelType, WssSubscription,
 };
+use crate::{ClobClient, state};
 use chrono::Utc;
 use chrono::{DateTime, Datelike};
 use dashmap::{DashMap, DashSet};
@@ -158,8 +159,8 @@ fn parse_market(market: Market) -> Vec<Token> {
         .collect()
 }
 
-type MessageHandler =
-    Box<dyn Fn(&mut OrderBookManager, StreamMessage) -> Result<()> + Send + Sync + 'static>;
+// type MessageHandler =
+//     Box<dyn Fn(&mut OrderBookManager, StreamMessage) -> Result<()> + Send + Sync + 'static>;
 pub struct DataEngine {
     client: Arc<ClobClient>,
     subscribe_tokens: DashSet<String>,
@@ -167,14 +168,13 @@ pub struct DataEngine {
     subscribe_rx: Arc<Mutex<mpsc::UnboundedReceiver<Token>>>,
     subscribe_write_stream: DashMap<WssChannelType, Arc<Mutex<SplitSink<WebSocketStream, Value>>>>,
     subscribe_read_stream: DashMap<WssChannelType, Arc<Mutex<SplitStream<WebSocketStream>>>>,
+    global_state: Arc<GlobalState>,
     // mock_subscribe_write_stream: DashMap<WssChannelType, Arc<Mutex<SplitSink<MockStream, Value>>>>,
     // mock_subscribe_read_stream: DashMap<WssChannelType, Arc<Mutex<SplitStream<MockStream>>>>,
-    book_manager: Arc<std::sync::Mutex<OrderBookManager>>,
-    message_handles: HashMap<std::mem::Discriminant<StreamMessage>, MessageHandler>,
 }
 
 impl DataEngine {
-    pub async fn new() -> Self {
+    pub async fn new(state: Arc<GlobalState>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let channels = [
             WssChannelType::Crypto,
@@ -187,7 +187,6 @@ impl DataEngine {
         for chan in channels {
             let stream = WebSocketStream::new(WEBSOCKET_MARKET_URL);
             // stream = stream.with_auth(auth.clone());
-            println!("initialize");
             match stream.init_and_split().await {
                 Ok((writer, reader)) => {
                     subscribe_write_stream.insert(chan, Arc::new(Mutex::new(writer)));
@@ -199,8 +198,6 @@ impl DataEngine {
             }
         }
 
-        let mut message_handles = HashMap::new();
-
         Self {
             client: Arc::new(ClobClient::new_internet("https://clob.polymarket.com")),
             subscribe_tokens: DashSet::new(),
@@ -208,8 +205,7 @@ impl DataEngine {
             subscribe_tx: Arc::new(Mutex::new(tx)),
             subscribe_write_stream,
             subscribe_read_stream,
-            book_manager: Arc::new(std::sync::Mutex::new(OrderBookManager::new(100))),
-            message_handles: message_handles,
+            global_state: state,
         }
     }
 
@@ -302,14 +298,8 @@ impl DataEngine {
 
     fn on_book(&self, book: BookMessage) -> Result<()> {
         let token_id = book.asset_id.clone();
-        {
-            let manager_guard = self
-                .book_manager
-                .lock()
-                .map_err(|_| PolyfillError::internal_simple("fail to get book"))?;
-            if manager_guard.is_exist(&book.asset_id)? {
-                return Ok(());
-            }
+        if self.global_state.has_order_book(&book.asset_id)? {
+            return Ok(());
         }
         let mut order_book = OrderBook::new(token_id.clone(), 100);
         for bid in book.bids {
@@ -336,13 +326,9 @@ impl DataEngine {
             };
             order_book.apply_delta(delta)?;
         }
-        {
-            let mut manager_guard = self
-                .book_manager
-                .lock()
-                .map_err(|_| PolyfillError::internal_simple("fail to get book"))?;
-            manager_guard.insert(order_book)?;
-        }
+        self.global_state
+            .insert_order_book(order_book)
+            .map_err(|_| PolyfillError::internal_simple("fail to insert order_book"))?;
         Ok(())
     }
 

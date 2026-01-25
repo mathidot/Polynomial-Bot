@@ -1,0 +1,3 @@
+[strategy.tail_eater]
+buy_threshold = 0.98
+max_slippage = 0.005

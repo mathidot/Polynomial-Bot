@@ -1,21 +1,27 @@
-use crate::common::Result;
-use crate::types::Side;
+use crate::OrderBookManager;
+use crate::book::OrderBook;
+use crate::{PolyfillError, Result};
 use dashmap::DashMap;
 use rust_decimal::Decimal;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicU64, Ordering},
+};
 
 pub struct PriceInfo {
     best_ask_price: AtomicU64,
     best_bid_price: AtomicU64,
 }
-pub struct State {
+pub struct GlobalState {
     tokens: DashMap<String, PriceInfo>,
+    book_manager: Arc<RwLock<OrderBookManager>>,
 }
 
-impl State {
+impl GlobalState {
     pub fn new() -> Self {
         Self {
             tokens: DashMap::new(),
+            book_manager: Arc::new(RwLock::new(OrderBookManager::new(100))),
         }
     }
 
@@ -35,5 +41,29 @@ impl State {
             let price_u64 = best_bid_price.mantissa() as u64;
             info.best_bid_price.store(price_u64, Ordering::Relaxed);
         }
+    }
+
+    pub fn insert_order_book(&self, book: OrderBook) -> Result<()> {
+        let mut books = self.book_manager.write().map_err(|_| {
+            PolyfillError::internal_simple("fail to accquire BookManager write lock")
+        })?;
+        books.insert(book)?;
+        Ok(())
+    }
+
+    pub fn has_order_book(&self, token_id: &str) -> Result<bool> {
+        let books = self
+            .book_manager
+            .read()
+            .map_err(|_| PolyfillError::internal_simple("fail to acquire BookManager read lock"))?;
+        books.is_exist(token_id)
+    }
+
+    pub fn get_book(&self, token_id: &str) -> Result<crate::book::OrderBook> {
+        let books = self
+            .book_manager
+            .read()
+            .map_err(|_| PolyfillError::internal_simple("fail to acquire BookManager read lock"))?;
+        books.get_book(&token_id)
     }
 }

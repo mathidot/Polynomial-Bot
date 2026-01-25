@@ -727,7 +727,7 @@ impl OrderBookManager {
 
     /// Get a book snapshot
     /// Returns a copy of the current book state that won't change
-    pub fn get_book(&self, token_id: &str) -> Result<crate::types::OrderBook> {
+    pub fn get_book_snapshot(&self, token_id: &str) -> Result<crate::types::OrderBook> {
         let books = self
             .books
             .read()
@@ -784,6 +784,21 @@ impl OrderBookManager {
             .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
         books.insert(book.token_id.clone(), book);
         Ok(())
+    }
+
+    /// Get OrderBook reference
+    pub fn get_book(&self, token_id: &str) -> Result<OrderBook> {
+        let books = self
+            .books
+            .read()
+            .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
+
+        books.get(token_id).cloned().ok_or_else(|| {
+            PolyfillError::market_data(
+                format!("No book found for token: {}", token_id),
+                crate::errors::MarketDataErrorKind::TokenNotFound,
+            )
+        })
     }
 }
 
