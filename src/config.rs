@@ -3,10 +3,9 @@
 //! This module contains contract addresses and configuration for different
 //! networks and environments.
 
+use rust_decimal_macros::dec;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::fs;
-
 /// Contract configuration for a specific network
 #[derive(Debug, Clone)]
 pub struct ContractConfig {
@@ -164,8 +163,10 @@ pub struct Strategy {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TailEaterStrategy {
-    pub buy_threshold: f64,
-    pub max_slippage: f64,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub buy_threshold: rust_decimal::Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub max_slippage: rust_decimal::Decimal,
 }
 
 pub fn load_config() -> Config {
@@ -181,8 +182,8 @@ mod tests {
     #[test]
     fn test_load_foncig() {
         let config = load_config();
-        assert_eq!(config.strategy.tail_eater.buy_threshold, 0.98);
-        assert_eq!(config.strategy.tail_eater.max_slippage, 0.005);
+        assert_eq!(config.strategy.tail_eater.buy_threshold, dec!(0.98));
+        assert_eq!(config.strategy.tail_eater.max_slippage, dec!(0.005));
     }
 
     #[test]

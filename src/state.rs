@@ -66,4 +66,13 @@ impl GlobalState {
             .map_err(|_| PolyfillError::internal_simple("fail to acquire BookManager read lock"))?;
         books.get_book(&token_id)
     }
+
+    pub fn get_price(&self, token_id: &str) -> Result<Option<Decimal>> {
+        let books = self
+            .book_manager
+            .read()
+            .map_err(|_| PolyfillError::internal_simple("fail to acquire BookManager read lock"))?;
+        let book = books.get_book(token_id)?;
+        Ok(book.mid_price())
+    }
 }

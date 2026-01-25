@@ -1286,7 +1286,6 @@ pub struct Rewards {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenInfo {
     pub token_id: String,
-    pub side: Side,
     pub price: Decimal,
 }
 
@@ -1294,7 +1293,6 @@ impl TokenInfo {
     pub fn new(id: String, side: Side, p: Decimal) -> Self {
         Self {
             token_id: id,
-            side,
             price: p,
         }
     }

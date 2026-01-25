@@ -7,7 +7,7 @@ use crate::errors::{PolyfillError, Result, StreamErrorKind};
 use crate::state::GlobalState;
 use crate::stream::{MockStream, WebSocketStream};
 use crate::types::{
-    BookMessage, OrderDelta, PriceChange, PriceChangeMessage, StreamMessage, WssAuth,
+    BookMessage, OrderDelta, PriceChange, PriceChangeMessage, StreamMessage, TokenInfo, WssAuth,
     WssChannelType, WssSubscription,
 };
 use crate::{ClobClient, state};
@@ -169,12 +169,11 @@ pub struct DataEngine {
     subscribe_write_stream: DashMap<WssChannelType, Arc<Mutex<SplitSink<WebSocketStream, Value>>>>,
     subscribe_read_stream: DashMap<WssChannelType, Arc<Mutex<SplitStream<WebSocketStream>>>>,
     global_state: Arc<GlobalState>,
-    // mock_subscribe_write_stream: DashMap<WssChannelType, Arc<Mutex<SplitSink<MockStream, Value>>>>,
-    // mock_subscribe_read_stream: DashMap<WssChannelType, Arc<Mutex<SplitStream<MockStream>>>>,
+    token_tx: mpsc::UnboundedSender<TokenInfo>,
 }
 
 impl DataEngine {
-    pub async fn new(state: Arc<GlobalState>) -> Self {
+    pub async fn new(state: Arc<GlobalState>, token_tx: mpsc::UnboundedSender<TokenInfo>) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let channels = [
             WssChannelType::Crypto,
@@ -206,6 +205,7 @@ impl DataEngine {
             subscribe_write_stream,
             subscribe_read_stream,
             global_state: state,
+            token_tx: token_tx,
         }
     }
 
@@ -329,11 +329,24 @@ impl DataEngine {
         self.global_state
             .insert_order_book(order_book)
             .map_err(|_| PolyfillError::internal_simple("fail to insert order_book"))?;
+
+        if let Ok(Some(price)) = self.global_state.get_price(&token_id) {
+            let token_info = TokenInfo {
+                token_id: token_id,
+                price: price,
+            };
+
+            match self.token_tx.send(token_info) {
+                Ok(()) => println!("translate token_info"),
+                Err(_) => println!("err while translate token_info"),
+            }
+        }
+
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn on_price_change(&self, price_changes: PriceChangeMessage) -> Result<()> {
-        for price_change in price_changes.price_changes {}
         Ok(())
     }
 
@@ -386,7 +399,7 @@ impl DataEngine {
         Ok(())
     }
 
-    pub fn start(self: Arc<Self>) {
+    pub fn run(self: Arc<Self>) {
         let engine1 = self.clone();
         tokio::spawn(async move {
             engine1.receive_crypto_tokens().await;
