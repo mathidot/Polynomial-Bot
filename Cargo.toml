@@ -50,7 +50,8 @@ reqwest = { version = "0.13.1", features = ["json", "gzip", "query"] }
 hickory-resolver = { version = "0.25.2", features = ["tokio"] }
 simd-json = "0.17.0"
 mockito = "1.7.1"
-toml = "0.9.11"
+toml = "0.9.8"
+dotenvy = "0.15.7"
 
 [dependencies.uuid]
 version = "1.20.0"

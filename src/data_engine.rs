@@ -370,28 +370,28 @@ impl DataEngine {
                     }
                 }
                 StreamMessage::PriceChange(price_change) => {
-                    println!("receive price change: {:?}", price_change);
+                    // println!("receive price change: {:?}", price_change);
                 }
                 StreamMessage::TickSizeChange(tick_size_change) => {
-                    println!("receive tick size change: {:?}", tick_size_change);
+                    // println!("receive tick size change: {:?}", tick_size_change);
                 }
                 StreamMessage::LastTradePrice(last_trade_price) => {
-                    println!("receive last trade price: {:?}", last_trade_price);
+                    // println!("receive last trade price: {:?}", last_trade_price);
                 }
                 StreamMessage::BestBidAsk(best_bid_ask) => {
-                    println!("receive best bid ask: {:?}", best_bid_ask);
+                    // println!("receive best bid ask: {:?}", best_bid_ask);
                 }
                 StreamMessage::NewMarket(new_market) => {
-                    println!("receive new market: {:?}", new_market);
+                    // println!("receive new market: {:?}", new_market);
                 }
                 StreamMessage::MarketResolved(market_resolved) => {
-                    println!("receive market resolved: {:?}", market_resolved);
+                    // println!("receive market resolved: {:?}", market_resolved);
                 }
                 StreamMessage::Trade(trade) => {
-                    println!("receive trade: {:?}", trade);
+                    // println!("receive trade: {:?}", trade);
                 }
                 StreamMessage::Order(order) => {
-                    println!("receive order: {:?}", order);
+                    // println!("receive order: {:?}", order);
                 }
                 _ => {}
             }

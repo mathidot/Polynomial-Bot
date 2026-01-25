@@ -411,13 +411,13 @@ impl Stream for WebSocketStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // First check message buffer
         if let Some(message) = self.msg_buffer.pop_front() {
-            println!("message from buffer: {:?}", message);
+            // println!("message from buffer: {:?}", message);
             return Poll::Ready(Some(Ok(message)));
         }
 
         // Second check internal channel
         if let Poll::Ready(Some(message)) = self.rx.poll_recv(cx) {
-            println!("message from internal channel: {:?}", message);
+            // println!("message from internal channel: {:?}", message);
             return Poll::Ready(Some(Ok(message)));
         }
 
@@ -425,7 +425,7 @@ impl Stream for WebSocketStream {
         if let Some(connection) = &mut self.connection {
             match connection.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(_message))) => {
-                    println!("message from websocket connection: {}", _message);
+                    // println!("message from websocket connection: {}", _message);
                     let text = match _message {
                         Message::Text(text) => text,
                         _ => {
@@ -452,18 +452,18 @@ impl Stream for WebSocketStream {
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    println!("WebSocket error: {}", e);
+                    // println!("WebSocket error: {}", e);
                     error!("WebSocket error: {}", e);
                     self.stats.errors += 1;
                     Poll::Ready(Some(Err(e.into())))
                 }
                 Poll::Ready(None) => {
-                    println!("WebSocket stream ended");
+                    // println!("WebSocket stream ended");
                     info!("WebSocket stream ended");
                     Poll::Ready(None)
                 }
                 Poll::Pending => {
-                    println!("WebSocket stream pending");
+                    // println!("WebSocket stream pending");
                     Poll::Pending
                 }
             }

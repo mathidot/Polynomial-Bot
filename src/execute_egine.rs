@@ -36,6 +36,7 @@ impl ExecuteEgine {
 
     pub async fn tick(&mut self) {
         while let Some(token_info) = self.token_rx.recv().await {
+            println!("exec engine recv token info: {:?}", token_info);
             let token_id = token_info.token_id;
             let current_price = token_info.price;
             if current_price >= self.config.strategy.tail_eater.buy_threshold {
