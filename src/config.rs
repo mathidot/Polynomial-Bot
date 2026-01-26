@@ -150,13 +150,7 @@ impl Default for GlobalConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct Config {
-    pub strategy: Strategy,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct Strategy {
+pub struct StrategyConfig {
     pub tail_eater: TailEaterStrategy,
 }
 
@@ -169,9 +163,22 @@ pub struct TailEaterStrategy {
     pub max_slippage: rust_decimal::Decimal,
 }
 
-pub fn load_config() -> Config {
-    let content = std::fs::read_to_string("config.toml").expect("fail to read config");
-    let config: Config = toml::from_str(&content).expect("fail to parse TOML");
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoggingConfig {
+    pub log_dir: String,
+    pub log_file: String,
+    pub level: String,
+}
+
+pub fn load_strategy_config() -> StrategyConfig {
+    let content = std::fs::read_to_string("strategy_config.toml").expect("fail to read config");
+    let config: StrategyConfig = toml::from_str(&content).expect("fail to parse TOML");
+    config
+}
+
+pub fn load_logging_config() -> LoggingConfig {
+    let content = std::fs::read_to_string("logging_config.toml").expect("fail to read config");
+    let config: LoggingConfig = toml::from_str(&content).expect("fail to parse TOML");
     config
 }
 
@@ -181,9 +188,13 @@ mod tests {
 
     #[test]
     fn test_load_foncig() {
-        let config = load_config();
-        assert_eq!(config.strategy.tail_eater.buy_threshold, dec!(0.98));
-        assert_eq!(config.strategy.tail_eater.max_slippage, dec!(0.005));
+        let strategy_config = load_strategy_config();
+        assert_eq!(strategy_config.tail_eater.buy_threshold, dec!(0.98));
+        assert_eq!(strategy_config.tail_eater.max_slippage, dec!(0.005));
+        let logging_config = load_logging_config();
+        assert_eq!(logging_config.level, "info");
+        assert_eq!(logging_config.log_file, "polynomial.log");
+        assert_eq!(logging_config.log_dir, "logs");
     }
 
     #[test]

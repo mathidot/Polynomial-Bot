@@ -1,5 +1,5 @@
 use crate::client::ClobClient;
-use crate::config::{self, Config, Strategy, TailEaterStrategy};
+use crate::config::{self, StrategyConfig, TailEaterStrategy};
 use crate::fill::{FillStats, FillStatus};
 use crate::types::TokenInfo;
 use crate::{FillEngine, GlobalState, OrderRequest, state};
@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 pub struct ExecuteEgine {
     client: ClobClient,
     token_rx: mpsc::UnboundedReceiver<TokenInfo>,
-    config: Config,
+    config: StrategyConfig,
     fill_egine: FillEngine,
     global_state: Arc<GlobalState>,
 }
@@ -21,7 +21,7 @@ impl ExecuteEgine {
     pub fn new(
         client: ClobClient,
         rx: mpsc::UnboundedReceiver<TokenInfo>,
-        cfg: Config,
+        cfg: StrategyConfig,
         fill: FillEngine,
         state: Arc<GlobalState>,
     ) -> Self {
@@ -39,7 +39,7 @@ impl ExecuteEgine {
             println!("exec engine recv token info: {:?}", token_info);
             let token_id = token_info.token_id;
             let current_price = token_info.price;
-            if current_price >= self.config.strategy.tail_eater.buy_threshold {
+            if current_price >= self.config.tail_eater.buy_threshold {
                 if let Ok(book) = self.global_state.get_book(&token_id) {
                     let order_request = OrderRequest {
                         token_id: token_id.clone(),
