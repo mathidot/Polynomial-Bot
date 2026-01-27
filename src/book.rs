@@ -203,7 +203,13 @@ impl OrderBook {
 
         // AFTER (fast, ~3ns, no allocations):
         let (best_bid_ticks, best_ask_ticks) = self.best_prices_fast()?;
+        tracing::debug!(
+            "best_bid_ticks: {}, best_ask_ticks: {}",
+            best_bid_ticks,
+            best_ask_ticks
+        );
         let mid_ticks = math::mid_price_fast(best_bid_ticks, best_ask_ticks)?;
+        tracing::debug!("mid_ticks: {}", mid_ticks);
         Some(price_to_decimal(mid_ticks))
     }
 

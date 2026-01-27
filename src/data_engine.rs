@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
+use tracing::info;
 
 trait TokenApi {
     async fn get_events_by_params(&self, params: HashMap<String, String>) -> Result<Value>;
@@ -192,7 +193,7 @@ impl DataEngine {
                     subscribe_read_stream.insert(chan, Arc::new(Mutex::new(reader)));
                 }
                 Err(e) => {
-                    eprintln!("Failed to connect to channel {:?}: {}", chan, e);
+                    tracing::error!("Failed to connect to channel {:?}: {}", chan, e);
                 }
             }
         }
@@ -218,7 +219,7 @@ impl DataEngine {
                     market_ids = ids;
                 }
                 Err(e) => {
-                    eprintln!("fail to get crypto ids: {}", e);
+                    tracing::error!("fail to get crypto ids: {}", e);
                     tokio::time::sleep(internal).await;
                     continue;
                 }
@@ -237,12 +238,12 @@ impl DataEngine {
                             token.token_type = TokenType::CRYPTO;
                             match self.subscribe_tx.lock().await.send(token) {
                                 Ok(_) => (),
-                                Err(e) => eprint!("transfer token meets err: {}", e),
+                                Err(e) => tracing::error!("transfer token meets err: {}", e),
                             }
                         }
                     }
-                    Ok(Err(e)) => eprintln!("api fail to request: {:?}", e),
-                    Err(e) => eprintln!("task crash down: {:?}", e),
+                    Ok(Err(e)) => tracing::error!("api fail to request: {:?}", e),
+                    Err(e) => tracing::error!("task crash down: {:?}", e),
                 }
             }
             tokio::time::sleep(internal).await;
@@ -256,7 +257,7 @@ impl DataEngine {
                     let engine = Arc::clone(&self);
                     tokio::spawn(async move {
                         if let Err(e) = engine.subscribe_token(token).await {
-                            eprintln!("fail to subscribe: {}", e);
+                            tracing::error!("fail to subscribe: {}", e);
                         }
                     });
                 }
@@ -297,6 +298,7 @@ impl DataEngine {
     }
 
     fn on_book(&self, book: BookMessage) -> Result<()> {
+        info!("Handle BookMessage: {:?}", book.clone());
         let token_id = book.asset_id.clone();
         if self.global_state.has_order_book(&book.asset_id)? {
             return Ok(());
@@ -330,18 +332,27 @@ impl DataEngine {
             .insert_order_book(order_book)
             .map_err(|_| PolyfillError::internal_simple("fail to insert order_book"))?;
 
-        if let Ok(Some(price)) = self.global_state.get_price(&token_id) {
-            let token_info = TokenInfo {
-                token_id: token_id,
-                price: price,
-            };
+        match self.global_state.get_price(&token_id) {
+            Ok(Some(price)) => {
+                let token_info = TokenInfo {
+                    token_id: token_id,
+                    price: price,
+                };
 
-            match self.token_tx.send(token_info) {
-                Ok(()) => println!("translate token_info"),
-                Err(_) => println!("err while translate token_info"),
+                info!("send token_info to execute_engine");
+
+                match self.token_tx.send(token_info) {
+                    Ok(()) => tracing::info!("translate token_info"),
+                    Err(_) => tracing::error!("err while translate token_info"),
+                };
+            }
+            Ok(None) => {
+                tracing::error!("get_none_price");
+            }
+            Err(e) => {
+                tracing::error!("get price error: {}", e);
             }
         }
-
         Ok(())
     }
 

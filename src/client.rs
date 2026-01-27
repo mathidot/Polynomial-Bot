@@ -2300,7 +2300,7 @@ mod tests {
 
         mock.assert_async().await;
         if let Err(e) = &result {
-            println!("Error: {:?}", e);
+            tracing::error!("Error: {:?}", e);
         }
         assert!(result.is_ok());
         let books = result.unwrap();

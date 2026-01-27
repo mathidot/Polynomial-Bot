@@ -7,6 +7,7 @@ use std::sync::{
     Arc, RwLock,
     atomic::{AtomicU64, Ordering},
 };
+use tracing::info;
 
 pub struct PriceInfo {
     best_ask_price: AtomicU64,

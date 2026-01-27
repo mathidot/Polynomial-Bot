@@ -9,6 +9,7 @@ use rust_decimal_macros::dec;
 use rustls::client;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing::info;
 pub struct ExecuteEgine {
     client: ClobClient,
     token_rx: mpsc::UnboundedReceiver<TokenInfo>,
@@ -36,7 +37,7 @@ impl ExecuteEgine {
 
     pub async fn tick(&mut self) {
         while let Some(token_info) = self.token_rx.recv().await {
-            println!("exec engine recv token info: {:?}", token_info);
+            info!("exec engine recv token info: {:?}", token_info);
             let token_id = token_info.token_id;
             let current_price = token_info.price;
             if current_price >= self.config.tail_eater.buy_threshold {
