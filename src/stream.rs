@@ -801,4 +801,20 @@ mod tests {
             println!("message: {:?}", message);
         }
     }
+
+    #[tokio::test]
+    async fn test_mock_stream() {
+        let stream = MockStream::new(10_0000);
+        let mut msgs: Vec<StreamMessage> = Vec::new();
+        let (_, mut r) = stream.split();
+
+        for _ in 1..=1000 {
+            if let Some(Ok(msg)) = r.next().await {
+                println!("{:?}", msg.clone());
+                msgs.push(msg);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        assert_eq!(msgs.len(), 10_0000);
+    }
 }
