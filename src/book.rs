@@ -227,6 +227,7 @@ impl OrderBook {
     /// Get best bid and ask prices in fast internal format
     /// Helper method to avoid code duplication and minimize conversions
     fn best_prices_fast(&self) -> Option<(Price, Price)> {
+        tracing::debug!("bids: {:?}, asks: {:?}", self.bids, self.asks);
         let best_bid_ticks = self.bids.iter().next_back()?.0;
         let best_ask_ticks = self.asks.iter().next()?.0;
         Some((*best_bid_ticks, *best_ask_ticks))
@@ -398,6 +399,13 @@ impl OrderBook {
             delta.sequence
         );
 
+        Ok(())
+    }
+
+    /// apply bid and ask to order book at one time
+    /// due to bid and ask from the same order book
+    fn apply_snapshot(&mut self) -> Result<()> {
+        let tick_size_decimal = self.tick_size_ticks.map(price_to_decimal);
         Ok(())
     }
 

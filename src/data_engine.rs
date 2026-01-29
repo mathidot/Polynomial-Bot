@@ -18,6 +18,8 @@ use futures::stream::{SplitSink, SplitStream};
 use futures::{Sink, SinkExt, Stream, StreamExt, future};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::fmt::Result;
+use std::task::Poll;
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
@@ -160,29 +162,75 @@ fn parse_market(market: Market) -> Vec<Token> {
         .collect()
 }
 
-// type MessageHandler =
-//     Box<dyn Fn(&mut OrderBookManager, StreamMessage) -> Result<()> + Send + Sync + 'static>;
-pub struct DataEngine {
-    client: Arc<ClobClient>,
-    subscribe_tokens: DashSet<String>,
-    subscribe_tx: Arc<Mutex<mpsc::UnboundedSender<Token>>>,
-    subscribe_rx: Arc<Mutex<mpsc::UnboundedReceiver<Token>>>,
-    subscribe_write_stream: DashMap<WssChannelType, Arc<Mutex<SplitSink<WebSocketStream, Value>>>>,
-    subscribe_read_stream: DashMap<WssChannelType, Arc<Mutex<SplitStream<WebSocketStream>>>>,
-    global_state: Arc<GlobalState>,
-    token_tx: mpsc::UnboundedSender<TokenInfo>,
+pub struct StreamProvider<S>
+where
+    S: Stream<Item = Result<StreamMessage>> + Sink<Value>,
+{
+    writer: SplitSink<S, Value>,
+    reader: SplitStream<S>,
 }
 
-impl DataEngine {
-    pub async fn new(state: Arc<GlobalState>, token_tx: mpsc::UnboundedSender<TokenInfo>) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
+impl<S> StreamProvider<S>
+where
+    S: Stream<Item = Result<StreamMessage>> + Sink<Value>,
+{
+    pub fn new(s: S) -> Self {
+        let (w, r) = s.split();
+        Self {
+            writer: w,
+            reader: r,
+        }
+    }
+
+    pub async fn send(&mut self, msg: Value) -> Result<()> {
+        self.writer
+            .send(msg)
+            .await
+            .map_err(|_| PolyfillError::Stream {
+                message: "fail to send msg".to_string(),
+                kind: StreamErrorKind::SubscriptionFailed,
+            });
+        Ok(())
+    }
+
+    pub async fn next(&mut self) -> Option<StreamMessage> {
+        return match self.reader.next().await {
+            Some(Ok(msg)) => Some(msg),
+            _ => None,
+        };
+    }
+}
+
+// type MessageHandler =
+//     Box<dyn Fn(&mut OrderBookManager, StreamMessage) -> Result<()> + Send + Sync + 'static>;
+pub struct DataEngine<S>
+where
+    S: 'static + Stream<Item = Result<StreamMessage>> + Sink<Value>,
+{
+    client: Arc<ClobClient>,
+    subscribe_tokens: DashSet<String>,
+    token_tx: Arc<Mutex<mpsc::UnboundedSender<Token>>>,
+    token_rx: Arc<Mutex<mpsc::UnboundedReceiver<Token>>>,
+    subscribe_stream: DashMap<WssChannelType, Arc<StreamProvider<S>>>,
+    global_state: Arc<GlobalState>,
+    token_info_tx: mpsc::UnboundedSender<TokenInfo>,
+}
+
+impl<S> DataEngine<S>
+where
+    S: Stream<Item = Result<StreamMessage>> + Sink<Value>,
+{
+    pub async fn new(
+        state: Arc<GlobalState>,
+        token_info_tx: mpsc::UnboundedSender<TokenInfo>,
+    ) -> Self {
+        let (token_tx, token_rx) = mpsc::unbounded_channel();
         let channels = [
             WssChannelType::Crypto,
             WssChannelType::Sports,
             WssChannelType::User,
         ];
-        let subscribe_write_stream = DashMap::new();
-        let subscribe_read_stream = DashMap::new();
+        let subscribe_stream = DashMap::new();
 
         for chan in channels {
             let stream = WebSocketStream::new(WEBSOCKET_MARKET_URL);
@@ -201,12 +249,12 @@ impl DataEngine {
         Self {
             client: Arc::new(ClobClient::new_internet("https://clob.polymarket.com")),
             subscribe_tokens: DashSet::new(),
-            subscribe_rx: Arc::new(Mutex::new(rx)),
-            subscribe_tx: Arc::new(Mutex::new(tx)),
+            token_tx: Arc::new(Mutex::new(token_tx)),
+            token_rx: Arc::new(Mutex::new(token_rx)),
             subscribe_write_stream,
             subscribe_read_stream,
             global_state: state,
-            token_tx: token_tx,
+            token_info_tx: token_info_tx,
         }
     }
 
@@ -236,7 +284,7 @@ impl DataEngine {
                         let tokens = parse_market(market);
                         for mut token in tokens {
                             token.token_type = TokenType::CRYPTO;
-                            match self.subscribe_tx.lock().await.send(token) {
+                            match self.token_tx.lock().await.send(token) {
                                 Ok(_) => (),
                                 Err(e) => tracing::error!("transfer token meets err: {}", e),
                             }
@@ -252,7 +300,7 @@ impl DataEngine {
 
     async fn receive_crypto_tokens(self: Arc<Self>) {
         loop {
-            if let Some(token) = self.subscribe_rx.lock().await.recv().await {
+            if let Some(token) = self.token_rx.lock().await.recv().await {
                 if !self.subscribe_tokens.contains(&token.token_id) {
                     let engine = Arc::clone(&self);
                     tokio::spawn(async move {
@@ -312,7 +360,7 @@ impl DataEngine {
                 side: crate::types::Side::BUY,
                 price: bid.price,
                 size: bid.size,
-                sequence: 0,
+                sequence: book.timestamp,
             };
             order_book.apply_delta(delta)?;
         }
@@ -324,7 +372,7 @@ impl DataEngine {
                 side: crate::types::Side::SELL,
                 price: ask.price,
                 size: ask.size,
-                sequence: 0,
+                sequence: book.timestamp,
             };
             order_book.apply_delta(delta)?;
         }
@@ -341,7 +389,7 @@ impl DataEngine {
 
                 info!("send token_info to execute_engine");
 
-                match self.token_tx.send(token_info) {
+                match self.token_info_tx.send(token_info) {
                     Ok(()) => tracing::info!("translate token_info"),
                     Err(_) => tracing::error!("err while translate token_info"),
                 };
@@ -423,7 +471,7 @@ impl DataEngine {
 
         let engine3 = self.clone();
         tokio::spawn(async move {
-            let ret = engine3.handle_message().await;
+            let _ = engine3.handle_message().await;
         });
     }
 
@@ -482,7 +530,7 @@ impl DataEngine {
 
         let val = self.client.get_events_by_params(params).await?;
         let events: Vec<String> =
-            serde_json::from_value(val).map_err(|e| PolyfillError::Parse {
+            serde_json::from_value(val).map_err(|_| PolyfillError::Parse {
                 message: "fail to parse events params".to_string(),
                 source: None,
             })?;
