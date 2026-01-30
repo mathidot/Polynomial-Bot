@@ -135,7 +135,8 @@ pub use crate::types::{
 
 pub use crate::book::{OrderBook as OrderBookImpl, OrderBookManager};
 pub use crate::client::OrderArgs;
-pub use crate::client::{ClobClient, PolyfillClient};
+pub use crate::client::{ClobClient, PolyfillClient, TokenApi};
+pub use crate::data_engine::{DataEngine, StreamProvider, SubscribedChannel};
 pub use crate::decode::Decoder;
 pub use crate::errors::{PolyfillError, Result};
 pub use crate::fill::{FillEngine, FillResult};
@@ -151,7 +152,6 @@ pub mod client;
 pub mod common;
 pub mod config;
 pub mod connection_manager;
-pub mod data_client;
 pub mod data_engine;
 pub mod decode;
 pub mod dns_cache;
@@ -169,7 +169,7 @@ pub mod utils;
 pub mod prelude {
     pub use crate::book::{BookAnalytics, OrderBook, OrderBookManager};
     pub use crate::common::{
-        CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, Token, WEBSOCKET_MARKET_URL,
+        CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, MarketResponse, TokenResponse, WEBSOCKET_MARKET_URL,
     };
     pub use crate::stream::{MockStream, WebSocketStream};
     pub use crate::types::{StreamMessage, WssAuth, WssChannelType};
