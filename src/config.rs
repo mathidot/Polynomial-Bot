@@ -163,6 +163,12 @@ pub struct TailEaterStrategy {
     pub max_slippage: rust_decimal::Decimal,
 }
 
+pub fn load_strategy_config() -> StrategyConfig {
+    let content = std::fs::read_to_string("strategy_config.toml").expect("fail to read config");
+    let config: StrategyConfig = toml::from_str(&content).expect("fail to parse TOML");
+    config
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct LoggingConfig {
     pub log_dir: String,
@@ -170,15 +176,29 @@ pub struct LoggingConfig {
     pub level: String,
 }
 
-pub fn load_strategy_config() -> StrategyConfig {
-    let content = std::fs::read_to_string("strategy_config.toml").expect("fail to read config");
-    let config: StrategyConfig = toml::from_str(&content).expect("fail to parse TOML");
-    config
-}
-
 pub fn load_logging_config() -> LoggingConfig {
     let content = std::fs::read_to_string("logging_config.toml").expect("fail to read config");
     let config: LoggingConfig = toml::from_str(&content).expect("fail to parse TOML");
+    config
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub enum EngineMode {
+    #[serde(alias = "MOCK", alias = "mock")]
+    MOCK,
+    #[serde(alias = "REAL", alias = "real")]
+    REAL,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EngineConfig {
+    pub engine_mode: EngineMode,
+}
+
+pub fn load_engine_config() -> EngineConfig {
+    let content = std::fs::read_to_string("engine_config.toml").expect("fail to read config");
+    let config: EngineConfig = toml::from_str(&content).expect("fail to parse TOML");
     config
 }
 
@@ -225,5 +245,11 @@ mod tests {
 
         let network = config.get_network(137);
         assert!(network.is_some());
+    }
+
+    #[test]
+    fn test_engine_config() {
+        let config = load_engine_config();
+        assert_eq!(config.engine_mode, EngineMode::MOCK);
     }
 }
