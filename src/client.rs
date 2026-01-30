@@ -21,7 +21,12 @@ use std::fmt::Debug;
 use std::str::FromStr;
 
 // Re-export types for compatibility
-pub use crate::types::{ApiCredentials as ApiCreds, OrderType, Side};
+use crate::common::{
+    EVENT_URL, MARKET_URL, MarketResponse, SLUG_URL, SPORT_URL, TokenResponse, TokenType,
+};
+pub use crate::types::{ApiCredentials as ApiCreds, OrderType, Side, TokenInfo};
+use async_trait::async_trait;
+use std::collections::{HashMap, HashSet};
 
 // Compatibility types
 #[derive(Debug)]
@@ -1709,6 +1714,127 @@ impl ClobClient {
 
         response
             .json::<Value>()
+            .await
+            .map_err(|e| PolyfillError::parse(format!("Failed to parse response: {}", e), None))
+    }
+}
+
+#[async_trait]
+pub trait TokenApi {
+    async fn get_events_by_params(&self, params: HashMap<String, String>) -> Result<Value>;
+    async fn get_specified_tag_ids(
+        &self,
+        filtered_list: Option<HashSet<String>>,
+    ) -> Result<Vec<String>>;
+    async fn get_market_id_by_slug(&self, event_slug: String) -> Result<Vec<String>>;
+    async fn get_market_by_id(&self, condition_id: &str) -> Result<MarketResponse>;
+}
+
+#[async_trait]
+impl TokenApi for ClobClient {
+    async fn get_events_by_params(&self, params: HashMap<String, String>) -> Result<Value> {
+        let response = self
+            .http_client
+            .get(EVENT_URL)
+            .json(&params)
+            .send()
+            .await
+            .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?;
+
+        let ret = response
+            .json::<Value>()
+            .await
+            .map_err(|e| PolyfillError::Parse {
+                message: e.to_string(),
+                source: Some(Box::new(e)),
+            });
+        ret
+    }
+
+    async fn get_specified_tag_ids(
+        &self,
+        filtered_list: Option<HashSet<String>>,
+    ) -> Result<Vec<String>> {
+        let mut tags_set: HashSet<String> = HashSet::new();
+        let mut ret: Vec<String> = Vec::new();
+
+        let filtered_list_ref = filtered_list.as_ref();
+
+        let sports_json: Value = self
+            .http_client
+            .get(SPORT_URL)
+            .send()
+            .await
+            .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?
+            .json()
+            .await?;
+
+        sports_json
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .get("sport")
+                    .and_then(|v| v.as_str())
+                    .map_or(false, |s| {
+                        filtered_list_ref.map_or(true, |set| set.contains(s))
+                    })
+            })
+            .filter_map(|entry| entry.get("tags")?.as_str())
+            .flat_map(|s| s.split(','))
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+            .for_each(|s| {
+                let tag = s.to_string();
+                if tags_set.insert(tag.clone()) {
+                    ret.push(tag);
+                }
+            });
+
+        Ok(ret)
+    }
+
+    async fn get_market_id_by_slug(&self, event_slug: String) -> Result<Vec<String>> {
+        let slug_url = format!("{}/{}", SLUG_URL, event_slug);
+        let resp_json: Value = self
+            .http_client
+            .get(slug_url)
+            .send()
+            .await
+            .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?
+            .json()
+            .await?;
+
+        let markets = resp_json.as_object().ok_or_else(|| PolyfillError::Parse {
+            message: "fail to parse markets_json".to_string(),
+            source: None,
+        })?;
+        let market_ids: Vec<String> = markets
+            .get("markets")
+            .and_then(|m: &Value| m.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|m: &Value| {
+                m.get("id")
+                    .and_then(|id| id.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        Ok(market_ids)
+    }
+
+    async fn get_market_by_id(&self, condition_id: &str) -> Result<MarketResponse> {
+        let response = self
+            .http_client
+            .get(format!("{}/{}", MARKET_URL, condition_id))
+            .send()
+            .await
+            .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?;
+
+        response
+            .json::<MarketResponse>()
             .await
             .map_err(|e| PolyfillError::parse(format!("Failed to parse response: {}", e), None))
     }
