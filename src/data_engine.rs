@@ -8,7 +8,7 @@ use crate::types::{
     BookMessage, OrderDelta, PriceChangeMessage, StreamMessage, TokenInfo, WssAuth, WssChannelType,
     WssSubscription,
 };
-use crate::{ClobClient, DEFAULT_BASE_URL, TokenApi};
+use crate::{BookSnapshot, ClobClient, DEFAULT_BASE_URL, TokenApi};
 use chrono::Utc;
 use chrono::{DateTime, Datelike};
 use dashmap::{DashMap, DashSet};
@@ -232,30 +232,15 @@ where
             return Ok(());
         }
         let mut order_book = OrderBook::new(token_id.clone(), 100);
-        for bid in book.bids {
-            let delta = OrderDelta {
-                token_id: token_id.clone(),
-                timestamp: DateTime::from_timestamp_millis(book.timestamp as i64)
-                    .unwrap_or(Utc::now()),
-                side: crate::types::Side::BUY,
-                price: bid.price,
-                size: bid.size,
-                sequence: book.timestamp,
-            };
-            order_book.apply_delta(delta)?;
-        }
-        for ask in book.asks {
-            let delta = OrderDelta {
-                token_id: token_id.clone(),
-                timestamp: DateTime::from_timestamp_millis(book.timestamp as i64)
-                    .unwrap_or(Utc::now()),
-                side: crate::types::Side::SELL,
-                price: ask.price,
-                size: ask.size,
-                sequence: book.timestamp,
-            };
-            order_book.apply_delta(delta)?;
-        }
+        let book_snapshot = BookSnapshot {
+            asset_id: book.asset_id,
+            timestamp: book.timestamp,
+            asks: book.asks,
+            bids: book.bids,
+        };
+
+        order_book.apply_book_snapshot(book_snapshot)?;
+
         self.global_state
             .insert_order_book(order_book)
             .map_err(|_| PolyfillError::internal_simple("fail to insert order_book"))?;

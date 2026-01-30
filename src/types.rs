@@ -707,6 +707,15 @@ pub struct BookMessage {
     pub asks: Vec<OrderSummary>,
 }
 
+/// BookSnapshot is used to apply fast to BookManager
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookSnapshot {
+    pub asset_id: String,
+    pub timestamp: u64,
+    pub bids: Vec<OrderSummary>,
+    pub asks: Vec<OrderSummary>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderSummary {
     #[serde(with = "rust_decimal::serde::str")]

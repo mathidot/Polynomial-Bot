@@ -1,6 +1,7 @@
 //! Order book management for Polymarket client
 
-use crate::errors::{PolyfillError, Result};
+use crate::errors::{OrderErrorKind, PolyfillError, Result, StreamErrorKind};
+use crate::time::now_micros;
 use crate::types::*;
 use crate::utils::math;
 use chrono::Utc;
@@ -404,8 +405,114 @@ impl OrderBook {
 
     /// apply bid and ask to order book at one time
     /// due to bid and ask from the same order book
-    fn apply_snapshot(&mut self) -> Result<()> {
+    pub fn apply_book_snapshot(&mut self, book_snapshot: BookSnapshot) -> Result<()> {
+        if book_snapshot.timestamp <= self.sequence {
+            trace!(
+                "Ignoring stale delta: {} <= {}",
+                book_snapshot.timestamp, self.sequence
+            );
+            return Ok(());
+        }
         let tick_size_decimal = self.tick_size_ticks.map(price_to_decimal);
+        let mut passed_ask_orders = Vec::new();
+        let mut passed_bid_orders = Vec::new();
+
+        // todo: the following validation is really needed?
+        if let Some(tick_size) = tick_size_decimal {
+            for bid in book_snapshot.bids {
+                if !is_price_tick_aligned(bid.price, tick_size) {
+                    return Err(PolyfillError::validation(
+                        "price is not aligned with tick_size",
+                    ));
+                } else {
+                    passed_bid_orders.push(bid);
+                }
+            }
+            for ask in book_snapshot.asks {
+                if !is_price_tick_aligned(ask.price, tick_size) {
+                    return Err(PolyfillError::validation(
+                        "price is not aligned with tick_size",
+                    ));
+                } else {
+                    passed_ask_orders.push(ask);
+                }
+            }
+        }
+
+        for bid in passed_bid_orders {
+            let price = decimal_to_price(bid.price)
+                .map_err(|e| PolyfillError::parse(e.to_string(), None))?;
+            let size =
+                decimal_to_qty(bid.size).map_err(|e| PolyfillError::parse(e.to_string(), None))?;
+
+            let token_id_hash = {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                book_snapshot.asset_id.hash(&mut hasher);
+                hasher.finish()
+            };
+
+            if token_id_hash != self.token_id_hash {
+                return Err(PolyfillError::validation("Token ID mismatch"));
+            }
+
+            if let Some(tick_size_ticks) = self.tick_size_ticks {
+                if tick_size_ticks > 0 && !price.is_multiple_of(tick_size_ticks) {
+                    // Price is not aligned to tick size - reject the update
+                    warn!(
+                        "Rejecting misaligned price: {} not divisible by tick size {}",
+                        price, tick_size_ticks
+                    );
+                    return Err(PolyfillError::validation("Price not aligned to tick size"));
+                }
+            }
+
+            self.sequence = book_snapshot.timestamp;
+            self.timestamp = Utc::now();
+            self.apply_bid_delta_fast(price, size);
+        }
+
+        for ask in passed_ask_orders {
+            let price = decimal_to_price(ask.price)
+                .map_err(|e| PolyfillError::parse(e.to_string(), None))?;
+            let size =
+                decimal_to_qty(ask.size).map_err(|e| PolyfillError::parse(e.to_string(), None))?;
+
+            let token_id_hash = {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                book_snapshot.asset_id.hash(&mut hasher);
+                hasher.finish()
+            };
+
+            if token_id_hash != self.token_id_hash {
+                return Err(PolyfillError::validation("Token ID mismatch"));
+            }
+
+            if let Some(tick_size_ticks) = self.tick_size_ticks {
+                if tick_size_ticks > 0 && !price.is_multiple_of(tick_size_ticks) {
+                    // Price is not aligned to tick size - reject the update
+                    warn!(
+                        "Rejecting misaligned price: {} not divisible by tick size {}",
+                        price, tick_size_ticks
+                    );
+                    return Err(PolyfillError::validation("Price not aligned to tick size"));
+                }
+            }
+
+            self.sequence = book_snapshot.timestamp;
+            self.timestamp = Utc::now();
+            self.apply_ask_delta_fast(price, size);
+        }
+        self.trim_depth();
+
+        debug!(
+            "Applied book snapshot asset_id: {}, sequence: {}",
+            book_snapshot.asset_id, self.sequence
+        );
+
         Ok(())
     }
 

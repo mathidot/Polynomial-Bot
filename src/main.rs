@@ -72,21 +72,19 @@ async fn main() -> Result<()> {
         data_engine.run();
     });
 
-    let _ = tokio::try_join!(data_engine_handle);
-
     // load config
-    // let private_key = env::var("PK").expect("PRIVATE_KEY must be set in .env file");
-    // let strategy_config = config::load_strategy_config();
-    // let client = ClobClient::with_l1_headers(DEFAULT_BASE_URL, &private_key, DEFAULT_CHAIN_ID);
-    // let fill_engine = FillEngine::new(dec!(10), dec!(0.5), 0);
-    // let mut execute_egine =
-    //     ExecuteEgine::new(client, rx, strategy_config, fill_engine, global_state);
+    let private_key = env::var("PK").expect("PRIVATE_KEY must be set in .env file");
+    let strategy_config = config::load_strategy_config();
+    let client = ClobClient::with_l1_headers(DEFAULT_BASE_URL, &private_key, DEFAULT_CHAIN_ID);
+    let fill_engine = FillEngine::new(dec!(10), dec!(0.5), 0);
+    let mut execute_egine =
+        ExecuteEgine::new(client, rx, strategy_config, fill_engine, global_state);
 
-    // let execute_engine_handle = tokio::spawn(async move {
-    //     execute_egine.run().await;
-    // });
+    let execute_engine_handle = tokio::spawn(async move {
+        execute_egine.run().await;
+    });
 
-    // let _ = tokio::try_join!(data_engine_handle, execute_engine_handle);
+    let _ = tokio::try_join!(data_engine_handle, execute_engine_handle);
 
     tokio::signal::ctrl_c()
         .await
