@@ -42,7 +42,7 @@ pub enum Outcome {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Market {
+pub struct MarketResponse {
     pub id: String,
     pub question: String,
     pub condition_id: String,
@@ -99,7 +99,7 @@ pub struct Market {
     pub neg_risk: bool,
 }
 
-impl Default for Token {
+impl Default for TokenResponse {
     fn default() -> Self {
         Self {
             token_type: TokenType::CRYPTO,
@@ -112,7 +112,7 @@ impl Default for Token {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
-pub struct Token {
+pub struct TokenResponse {
     pub token_type: TokenType,
     pub token_id: String,
     pub outcome: String,
