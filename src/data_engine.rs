@@ -1,158 +1,49 @@
-use crate::book::{OrderBook, OrderBookManager};
+use crate::book::OrderBook;
 use crate::common::{
-    CRYPTO_PATTERNS, EVENT_URL, MARKET_URL, Market, SLUG_URL, SPORT_URL, Token, TokenType,
-    WEBSOCKET_MARKET_URL,
+    CRYPTO_PATTERNS, MarketResponse, TokenResponse, TokenType, WEBSOCKET_MARKET_URL,
 };
 use crate::errors::{PolyfillError, Result, StreamErrorKind};
 use crate::state::GlobalState;
-use crate::stream::{MockStream, WebSocketStream};
 use crate::types::{
-    BookMessage, OrderDelta, PriceChange, PriceChangeMessage, StreamMessage, TokenInfo, WssAuth,
-    WssChannelType, WssSubscription,
+    BookMessage, OrderDelta, PriceChangeMessage, StreamMessage, TokenInfo, WssAuth, WssChannelType,
+    WssSubscription,
 };
-use crate::{ClobClient, state};
+use crate::{ClobClient, DEFAULT_BASE_URL, TokenApi};
 use chrono::Utc;
 use chrono::{DateTime, Datelike};
 use dashmap::{DashMap, DashSet};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{Sink, SinkExt, Stream, StreamExt, future};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
-use std::fmt::Result;
-use std::task::Poll;
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
 use tracing::info;
 
-trait TokenApi {
-    async fn get_events_by_params(&self, params: HashMap<String, String>) -> Result<Value>;
-    async fn get_specified_tag_ids(
-        &self,
-        filtered_list: Option<HashSet<String>>,
-    ) -> Result<Vec<String>>;
+fn generate_crypto_slugs() -> Vec<String> {
+    let mut slugs: Vec<String> = Vec::new();
+    let base_now = chrono::Local::now();
 
-    async fn get_market_id_by_slug(&self, event_slug: String) -> Result<Vec<String>>;
-
-    async fn get_market_by_id(&self, condition_id: &str) -> Result<Market>;
+    for i in 0..3 {
+        let future_date = base_now + chrono::Duration::days(i);
+        let f_month = future_date.format("%B").to_string().to_lowercase();
+        let f_day = future_date.day();
+        let f_suffix = format!("-on-{}-{}", f_month, f_day);
+        for p in CRYPTO_PATTERNS {
+            slugs.push(format!("{}{}", p, f_suffix));
+        }
+    }
+    return slugs;
 }
 
-impl TokenApi for ClobClient {
-    async fn get_events_by_params(&self, params: HashMap<String, String>) -> Result<Value> {
-        let response = self
-            .http_client
-            .get(EVENT_URL)
-            .json(&params)
-            .send()
-            .await
-            .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?;
-
-        let ret = response
-            .json::<Value>()
-            .await
-            .map_err(|e| PolyfillError::Parse {
-                message: e.to_string(),
-                source: Some(Box::new(e)),
-            });
-        ret
-    }
-
-    async fn get_specified_tag_ids(
-        &self,
-        filtered_list: Option<HashSet<String>>,
-    ) -> Result<Vec<String>> {
-        let mut tags_set: HashSet<String> = HashSet::new();
-        let mut ret: Vec<String> = Vec::new();
-
-        let filtered_list_ref = filtered_list.as_ref();
-
-        let sports_json: Value = self
-            .http_client
-            .get(SPORT_URL)
-            .send()
-            .await
-            .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?
-            .json()
-            .await?;
-
-        sports_json
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|entry| {
-                entry
-                    .get("sport")
-                    .and_then(|v| v.as_str())
-                    .map_or(false, |s| {
-                        filtered_list_ref.map_or(true, |set| set.contains(s))
-                    })
-            })
-            .filter_map(|entry| entry.get("tags")?.as_str())
-            .flat_map(|s| s.split(','))
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
-            .for_each(|s| {
-                let tag = s.to_string();
-                if tags_set.insert(tag.clone()) {
-                    ret.push(tag);
-                }
-            });
-
-        Ok(ret)
-    }
-
-    async fn get_market_id_by_slug(&self, event_slug: String) -> Result<Vec<String>> {
-        let slug_url = format!("{}/{}", SLUG_URL, event_slug);
-        let resp_json: Value = self
-            .http_client
-            .get(slug_url)
-            .send()
-            .await
-            .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?
-            .json()
-            .await?;
-
-        let markets = resp_json.as_object().ok_or_else(|| PolyfillError::Parse {
-            message: "fail to parse markets_json".to_string(),
-            source: None,
-        })?;
-        let market_ids: Vec<String> = markets
-            .get("markets")
-            .and_then(|m: &Value| m.as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(|m: &Value| {
-                m.get("id")
-                    .and_then(|id| id.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string())
-            })
-            .collect();
-        Ok(market_ids)
-    }
-
-    async fn get_market_by_id(&self, condition_id: &str) -> Result<Market> {
-        let response = self
-            .http_client
-            .get(format!("{}/{}", MARKET_URL, condition_id))
-            .send()
-            .await
-            .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?;
-
-        response
-            .json::<Market>()
-            .await
-            .map_err(|e| PolyfillError::parse(format!("Failed to parse response: {}", e), None))
-    }
-}
-
-fn parse_market(market: Market) -> Vec<Token> {
+pub fn parse_market(market: MarketResponse) -> Vec<TokenResponse> {
     market
         .tokens
         .iter()
         .enumerate()
         .zip(market.outcomes.iter())
-        .map(|((i, id), outcome)| Token {
+        .map(|((i, id), outcome)| TokenResponse {
             token_id: id.clone(),
             outcome: outcome.clone(),
             winner: { if i == 0 { true } else { false } },
@@ -162,97 +53,89 @@ fn parse_market(market: Market) -> Vec<Token> {
         .collect()
 }
 
+pub struct SubscribedChannel<S>
+where
+    S: 'static + Stream<Item = Result<StreamMessage>> + Sink<Value> + Send,
+{
+    pub chan_type: WssChannelType,
+    pub chan_stream: S,
+}
+
 pub struct StreamProvider<S>
 where
-    S: Stream<Item = Result<StreamMessage>> + Sink<Value>,
+    S: 'static + Stream<Item = Result<StreamMessage>> + Sink<Value> + Send,
 {
-    writer: SplitSink<S, Value>,
-    reader: SplitStream<S>,
+    writer: Mutex<SplitSink<S, Value>>,
+    reader: Mutex<SplitStream<S>>,
 }
 
 impl<S> StreamProvider<S>
 where
-    S: Stream<Item = Result<StreamMessage>> + Sink<Value>,
+    S: 'static + Stream<Item = Result<StreamMessage>> + Sink<Value> + Send,
 {
     pub fn new(s: S) -> Self {
         let (w, r) = s.split();
         Self {
-            writer: w,
-            reader: r,
+            writer: Mutex::new(w),
+            reader: Mutex::new(r),
         }
     }
 
-    pub async fn send(&mut self, msg: Value) -> Result<()> {
+    pub async fn send(&self, msg: Value) -> Result<()> {
         self.writer
+            .lock()
+            .await
             .send(msg)
             .await
             .map_err(|_| PolyfillError::Stream {
                 message: "fail to send msg".to_string(),
                 kind: StreamErrorKind::SubscriptionFailed,
-            });
-        Ok(())
+            })
     }
 
-    pub async fn next(&mut self) -> Option<StreamMessage> {
-        return match self.reader.next().await {
+    pub async fn next(&self) -> Option<StreamMessage> {
+        return match self.reader.lock().await.next().await {
             Some(Ok(msg)) => Some(msg),
             _ => None,
         };
     }
 }
 
-// type MessageHandler =
-//     Box<dyn Fn(&mut OrderBookManager, StreamMessage) -> Result<()> + Send + Sync + 'static>;
 pub struct DataEngine<S>
 where
-    S: 'static + Stream<Item = Result<StreamMessage>> + Sink<Value>,
+    S: 'static + Send + Stream<Item = Result<StreamMessage>> + Sink<Value>,
 {
     client: Arc<ClobClient>,
     subscribe_tokens: DashSet<String>,
-    token_tx: Arc<Mutex<mpsc::UnboundedSender<Token>>>,
-    token_rx: Arc<Mutex<mpsc::UnboundedReceiver<Token>>>,
-    subscribe_stream: DashMap<WssChannelType, Arc<StreamProvider<S>>>,
+    token_tx: Arc<Mutex<mpsc::UnboundedSender<TokenResponse>>>,
+    token_rx: Arc<Mutex<mpsc::UnboundedReceiver<TokenResponse>>>,
+    subscribe_provider: DashMap<WssChannelType, Arc<StreamProvider<S>>>,
     global_state: Arc<GlobalState>,
     token_info_tx: mpsc::UnboundedSender<TokenInfo>,
 }
 
 impl<S> DataEngine<S>
 where
-    S: Stream<Item = Result<StreamMessage>> + Sink<Value>,
+    S: 'static + Stream<Item = Result<StreamMessage>> + Sink<Value> + Send,
 {
     pub async fn new(
         state: Arc<GlobalState>,
         token_info_tx: mpsc::UnboundedSender<TokenInfo>,
+        channels: Vec<SubscribedChannel<S>>,
     ) -> Self {
         let (token_tx, token_rx) = mpsc::unbounded_channel();
-        let channels = [
-            WssChannelType::Crypto,
-            WssChannelType::Sports,
-            WssChannelType::User,
-        ];
-        let subscribe_stream = DashMap::new();
-
+        let subscribe_provider: DashMap<WssChannelType, Arc<StreamProvider<S>>> = DashMap::new();
         for chan in channels {
-            let stream = WebSocketStream::new(WEBSOCKET_MARKET_URL);
-            // stream = stream.with_auth(auth.clone());
-            match stream.init_and_split().await {
-                Ok((writer, reader)) => {
-                    subscribe_write_stream.insert(chan, Arc::new(Mutex::new(writer)));
-                    subscribe_read_stream.insert(chan, Arc::new(Mutex::new(reader)));
-                }
-                Err(e) => {
-                    tracing::error!("Failed to connect to channel {:?}: {}", chan, e);
-                }
-            }
+            let provider = StreamProvider::new(chan.chan_stream);
+            subscribe_provider.insert(chan.chan_type, Arc::new(provider));
         }
 
         Self {
-            client: Arc::new(ClobClient::new_internet("https://clob.polymarket.com")),
+            client: Arc::new(ClobClient::new_internet(DEFAULT_BASE_URL)),
             subscribe_tokens: DashSet::new(),
             token_tx: Arc::new(Mutex::new(token_tx)),
             token_rx: Arc::new(Mutex::new(token_rx)),
-            subscribe_write_stream,
-            subscribe_read_stream,
+            subscribe_provider,
             global_state: state,
             token_info_tx: token_info_tx,
         }
@@ -313,33 +196,30 @@ where
         }
     }
 
-    async fn subscribe_token(&self, token: Token) -> Result<()> {
+    async fn subscribe_token(&self, token: TokenResponse) -> Result<()> {
         let chan_type = match token.token_type {
             TokenType::CRYPTO => WssChannelType::Crypto,
             TokenType::SPORTS => WssChannelType::Sports,
         };
 
-        let target_stream = self
-            .subscribe_write_stream
+        let target_provider = self
+            .subscribe_provider
             .get(&chan_type)
-            .map(|r| r.value().clone());
+            .map(|r| r.value().clone())
+            .ok_or_else(|| {
+                PolyfillError::stream(
+                    "cannot find target stream",
+                    StreamErrorKind::SubscriptionFailed,
+                )
+            })?;
 
-        if target_stream.is_none() {
-            return Err(PolyfillError::stream(
-                "cannot find target stream",
-                StreamErrorKind::SubscriptionFailed,
-            ));
-        }
-
-        let stream_mutex = target_stream.unwrap();
-        let mut stream = stream_mutex.lock().await;
         let token_subscription = WssSubscription {
             channel_type: "market".to_string(),
             asset_ids: vec![token.token_id.to_string()],
             operation: Some("subscribe".to_string()),
             auth: None,
         };
-        stream
+        target_provider
             .send(serde_json::to_value(token_subscription)?)
             .await?;
         Ok(())
@@ -410,8 +290,8 @@ where
     }
 
     async fn handle_message(&self) -> Result<()> {
-        let crypto_stream = match self.subscribe_read_stream.get_mut(&WssChannelType::Crypto) {
-            Some(stream) => stream.clone(),
+        let provider = match self.subscribe_provider.get_mut(&WssChannelType::Crypto) {
+            Some(provider) => provider.clone(),
             None => {
                 return Err(PolyfillError::Stream {
                     message: "cannot find target stream".to_string(),
@@ -419,8 +299,7 @@ where
                 });
             }
         };
-        let mut lock = crypto_stream.lock().await;
-        while let Some(Ok(message)) = lock.next().await {
+        while let Some(message) = provider.next().await {
             match message.clone() {
                 StreamMessage::Book(book) => {
                     if let Err(_) = self.on_book(book) {
@@ -476,7 +355,7 @@ where
     }
 
     async fn get_crypto_markets_id(&self) -> Result<Vec<String>> {
-        let slugs = DataEngine::generate_crypto_slugs();
+        let slugs = generate_crypto_slugs();
         return self.get_crypto_markets_by_slugs(slugs).await;
     }
 
@@ -495,22 +374,6 @@ where
 
     async fn get_market_id_by_slug(&self, event_slug: String) -> Result<Vec<String>> {
         self.client.get_market_id_by_slug(event_slug).await
-    }
-
-    fn generate_crypto_slugs() -> Vec<String> {
-        let mut slugs: Vec<String> = Vec::new();
-        let base_now = chrono::Local::now();
-
-        for i in 0..3 {
-            let future_date = base_now + chrono::Duration::days(i);
-            let f_month = future_date.format("%B").to_string().to_lowercase();
-            let f_day = future_date.day();
-            let f_suffix = format!("-on-{}-{}", f_month, f_day);
-            for p in CRYPTO_PATTERNS {
-                slugs.push(format!("{}{}", p, f_suffix));
-            }
-        }
-        return slugs;
     }
 
     #[allow(dead_code)]
