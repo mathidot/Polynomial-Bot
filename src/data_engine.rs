@@ -14,6 +14,7 @@ use chrono::{DateTime, Datelike};
 use dashmap::{DashMap, DashSet};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{Sink, SinkExt, Stream, StreamExt, future};
+use rust_decimal_macros::dec;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};
@@ -232,6 +233,7 @@ where
             return Ok(());
         }
         let mut order_book = OrderBook::new(token_id.clone(), 100);
+        order_book.set_tick_size(dec!(0.01))?;
         let book_snapshot = BookSnapshot {
             asset_id: book.asset_id,
             timestamp: book.timestamp,
@@ -239,7 +241,9 @@ where
             bids: book.bids,
         };
 
-        order_book.apply_book_snapshot(book_snapshot)?;
+        order_book
+            .apply_book_snapshot(book_snapshot)
+            .inspect_err(|e| tracing::error!("apply_book_snapshot failed: {}", e))?;
 
         self.global_state
             .insert_order_book(order_book)
