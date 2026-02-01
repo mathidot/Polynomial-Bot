@@ -8,7 +8,7 @@ use crate::types::{
     BookMessage, OrderDelta, PriceChangeMessage, StreamMessage, TokenInfo, WssAuth, WssChannelType,
     WssSubscription,
 };
-use crate::{BookSnapshot, ClobClient, DEFAULT_BASE_URL, TokenApi};
+use crate::{BookSnapshot, ClobClient, DEFAULT_BASE_URL, MarketStream, TokenApi};
 use chrono::Utc;
 use chrono::{DateTime, Datelike};
 use dashmap::{DashMap, DashSet};
@@ -17,6 +17,7 @@ use futures::{Sink, SinkExt, Stream, StreamExt, future};
 use rust_decimal_macros::dec;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
@@ -54,31 +55,32 @@ pub fn parse_market(market: MarketResponse) -> Vec<TokenResponse> {
         .collect()
 }
 
-pub struct SubscribedChannel<S>
-where
-    S: 'static + Stream<Item = Result<StreamMessage>> + Sink<Value> + Send,
-{
+pub struct SubscribedChannel {
     pub chan_type: WssChannelType,
-    pub chan_stream: S,
+    pub chan_stream: Box<dyn MarketStream>,
 }
 
-pub struct StreamProvider<S>
-where
-    S: 'static + Stream<Item = Result<StreamMessage>> + Sink<Value> + Send,
-{
-    writer: Mutex<SplitSink<S, Value>>,
-    reader: Mutex<SplitStream<S>>,
+pub struct StreamProvider {
+    writer: Mutex<Pin<Box<dyn Sink<Value, Error = PolyfillError> + Send>>>,
+    reader: Mutex<Pin<Box<dyn Stream<Item = Result<StreamMessage>> + Send>>>,
 }
 
-impl<S> StreamProvider<S>
-where
-    S: 'static + Stream<Item = Result<StreamMessage>> + Sink<Value> + Send,
-{
-    pub fn new(s: S) -> Self {
+impl StreamProvider {
+    pub fn new<S>(s: S) -> Self
+    where
+        S: Stream<Item = Result<StreamMessage>>
+            + Sink<Value, Error = PolyfillError>
+            + Send
+            + Unpin
+            + 'static,
+    {
         let (w, r) = s.split();
+        let writer: Pin<Box<dyn Sink<Value, Error = PolyfillError> + Send>> = Box::pin(w);
+        let reader: Pin<Box<dyn Stream<Item = Result<StreamMessage>> + Send>> = Box::pin(r);
+
         Self {
-            writer: Mutex::new(w),
-            reader: Mutex::new(r),
+            writer: Mutex::new(writer),
+            reader: Mutex::new(reader),
         }
     }
 
@@ -86,46 +88,41 @@ where
         self.writer
             .lock()
             .await
+            .as_mut()
             .send(msg)
             .await
-            .map_err(|_| PolyfillError::Stream {
-                message: "fail to send msg".to_string(),
+            .map_err(|e| PolyfillError::Stream {
+                message: format!("fail to send msg: {}", e),
                 kind: StreamErrorKind::SubscriptionFailed,
             })
     }
 
     pub async fn next(&self) -> Option<StreamMessage> {
-        return match self.reader.lock().await.next().await {
+        match self.reader.lock().await.as_mut().next().await {
             Some(Ok(msg)) => Some(msg),
             _ => None,
-        };
+        }
     }
 }
 
-pub struct DataEngine<S>
-where
-    S: 'static + Send + Stream<Item = Result<StreamMessage>> + Sink<Value>,
-{
+pub struct DataEngine {
     client: Arc<ClobClient>,
     subscribe_tokens: DashSet<String>,
     token_tx: Arc<Mutex<mpsc::UnboundedSender<TokenResponse>>>,
     token_rx: Arc<Mutex<mpsc::UnboundedReceiver<TokenResponse>>>,
-    subscribe_provider: DashMap<WssChannelType, Arc<StreamProvider<S>>>,
+    subscribe_provider: DashMap<WssChannelType, Arc<StreamProvider>>,
     global_state: Arc<GlobalState>,
     token_info_tx: mpsc::UnboundedSender<TokenInfo>,
 }
 
-impl<S> DataEngine<S>
-where
-    S: 'static + Stream<Item = Result<StreamMessage>> + Sink<Value> + Send,
-{
+impl DataEngine {
     pub async fn new(
         state: Arc<GlobalState>,
         token_info_tx: mpsc::UnboundedSender<TokenInfo>,
-        channels: Vec<SubscribedChannel<S>>,
+        channels: Vec<SubscribedChannel>,
     ) -> Self {
         let (token_tx, token_rx) = mpsc::unbounded_channel();
-        let subscribe_provider: DashMap<WssChannelType, Arc<StreamProvider<S>>> = DashMap::new();
+        let subscribe_provider: DashMap<WssChannelType, Arc<StreamProvider>> = DashMap::new();
         for chan in channels {
             let provider = StreamProvider::new(chan.chan_stream);
             subscribe_provider.insert(chan.chan_type, Arc::new(provider));

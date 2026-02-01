@@ -77,6 +77,9 @@ pub const DEFAULT_BASE_URL: &str = "https://clob.polymarket.com";
 pub const DEFAULT_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_MAX_RETRIES: u32 = 3;
 pub const DEFAULT_RATE_LIMIT_RPS: u32 = 100;
+pub const DEFAULT_WEBSOCKET_MARKET_URL: &str =
+    "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+pub const DEFAULT_WEBSOCKET_USER_URL: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
 
 // Initialize logging
 pub fn init() {

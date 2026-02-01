@@ -5,6 +5,7 @@
 
 use crate::errors::{PolyfillError, Result};
 use crate::types::*;
+use async_trait::async_trait;
 use chrono::Utc;
 use futures::{
     Sink, SinkExt, Stream, StreamExt,
@@ -21,9 +22,11 @@ use tokio::sync::mpsc;
 use tokio::time::{Sleep, sleep};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
-
 /// Trait for market data streams
-pub trait MarketStream: Stream<Item = Result<StreamMessage>> + Send + Sync {
+#[async_trait]
+pub trait MarketStream:
+    Stream<Item = Result<StreamMessage>> + Sink<Value, Error = PolyfillError> + Send + Unpin + 'static
+{
     /// Subscribe to market data for specific tokens
     fn subscribe(&mut self, subscription: Subscription) -> Result<()>;
 
@@ -35,6 +38,9 @@ pub trait MarketStream: Stream<Item = Result<StreamMessage>> + Send + Sync {
 
     /// Get connection statistics
     fn get_stats(&self) -> StreamStats;
+
+    /// Connect
+    async fn connect(&mut self) -> Result<()>;
 }
 
 /// WebSocket-based market stream implementation
@@ -552,6 +558,7 @@ impl Sink<Value> for WebSocketStream {
     }
 }
 
+#[async_trait]
 impl MarketStream for WebSocketStream {
     fn subscribe(&mut self, _subscription: Subscription) -> Result<()> {
         // This is for backward compatibility - use subscribe_async for new code
@@ -569,6 +576,21 @@ impl MarketStream for WebSocketStream {
 
     fn get_stats(&self) -> StreamStats {
         self.stats.clone()
+    }
+
+    async fn connect(&mut self) -> Result<()> {
+        let (ws_stream, _) = tokio_tungstenite::connect_async(&self.url)
+            .await
+            .map_err(|e| {
+                PolyfillError::stream(
+                    format!("WebSocket connection failed: {}", e),
+                    crate::errors::StreamErrorKind::ConnectionFailed,
+                )
+            })?;
+
+        self.connection = Some(ws_stream);
+        info!("Connected to WebSocket stream at {}", self.url);
+        Ok(())
     }
 }
 
@@ -605,7 +627,6 @@ impl MockStream {
         self.connected = connected;
     }
 }
-
 impl Stream for MockStream {
     type Item = Result<StreamMessage>;
 
@@ -621,7 +642,7 @@ impl Stream for MockStream {
                     let message: StreamMessage = rand::rng().random();
                     self.index += 1;
 
-                    let random_millis = rand::rng().random_range(100..1000);
+                    let random_millis = rand::rng().random_range(1..10);
                     self.sleep_timer
                         .as_mut()
                         .set(sleep(Duration::from_millis(random_millis)));
@@ -671,6 +692,7 @@ impl Sink<serde_json::Value> for MockStream {
     }
 }
 
+#[async_trait]
 impl MarketStream for MockStream {
     fn subscribe(&mut self, _subscription: Subscription) -> Result<()> {
         Ok(())
@@ -693,6 +715,10 @@ impl MarketStream for MockStream {
             connection_uptime: std::time::Duration::from_micros(1),
             reconnect_count: 0,
         }
+    }
+
+    async fn connect(&mut self) -> Result<()> {
+        Ok(())
     }
 }
 /// Stream manager for handling multiple streams

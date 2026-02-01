@@ -1,14 +1,18 @@
 use dotenvy::dotenv;
-use polynomial::DataEngine;
-use polynomial::GlobalState;
 use polynomial::SubscribedChannel;
+use polynomial::WebSocketStream;
 use polynomial::WssChannelType;
-use polynomial::config;
 use polynomial::config::EngineMode;
 use polynomial::errors::Result;
 use polynomial::stream::MockStream;
+use polynomial::{ClobClient, DataEngine, FillEngine, config};
+use polynomial::{
+    DEFAULT_BASE_URL, DEFAULT_CHAIN_ID, DEFAULT_WEBSOCKET_MARKET_URL, DEFAULT_WEBSOCKET_USER_URL,
+    GlobalState, execute_egine::ExecuteEgine,
+};
+use rust_decimal_macros::dec;
+use std::env;
 use std::sync::Arc;
-use tokio::join;
 use tokio::sync::mpsc;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -46,20 +50,35 @@ async fn main() -> Result<()> {
         EngineMode::MOCK => {
             subscribed_channels.push(SubscribedChannel {
                 chan_type: WssChannelType::Crypto,
-                chan_stream: MockStream::new(10000),
+                chan_stream: Box::new(MockStream::new(10000)),
             });
 
             subscribed_channels.push(SubscribedChannel {
                 chan_type: WssChannelType::Sports,
-                chan_stream: MockStream::new(10000),
+                chan_stream: Box::new(MockStream::new(10000)),
             });
 
             subscribed_channels.push(SubscribedChannel {
                 chan_type: WssChannelType::User,
-                chan_stream: MockStream::new(10000),
+                chan_stream: Box::new(MockStream::new(10000)),
             });
         }
-        EngineMode::REAL => {}
+        EngineMode::REAL => {
+            subscribed_channels.push(SubscribedChannel {
+                chan_type: WssChannelType::Crypto,
+                chan_stream: Box::new(WebSocketStream::new(DEFAULT_WEBSOCKET_MARKET_URL)),
+            });
+
+            subscribed_channels.push(SubscribedChannel {
+                chan_type: WssChannelType::Sports,
+                chan_stream: Box::new(WebSocketStream::new(DEFAULT_WEBSOCKET_MARKET_URL)),
+            });
+
+            subscribed_channels.push(SubscribedChannel {
+                chan_type: WssChannelType::User,
+                chan_stream: Box::new(WebSocketStream::new(DEFAULT_WEBSOCKET_USER_URL)),
+            });
+        }
     }
 
     let data_engine =
@@ -68,22 +87,20 @@ async fn main() -> Result<()> {
         data_engine.run();
     });
 
-    let _ = join!(data_engine_handle);
-
     // load config
-    // let private_key = env::var("PK").expect("PRIVATE_KEY must be set in .env file");:w
+    let private_key = env::var("PK").expect("PRIVATE_KEY must be set in .env file");
 
-    // let strategy_config = config::load_strategy_config();
-    // let client = ClobClient::with_l1_headers(DEFAULT_BASE_URL, &private_key, DEFAULT_CHAIN_ID);
-    // let fill_engine = FillEngine::new(dec!(10), dec!(0.5), 0);
-    // let mut execute_egine =
-    //     ExecuteEgine::new(client, rx, strategy_config, fill_engine, global_state);
+    let strategy_config = config::load_strategy_config();
+    let client = ClobClient::with_l1_headers(DEFAULT_BASE_URL, &private_key, DEFAULT_CHAIN_ID);
+    let fill_engine = FillEngine::new(dec!(10), dec!(0.5), 0);
+    let mut execute_egine =
+        ExecuteEgine::new(client, rx, strategy_config, fill_engine, global_state);
 
-    // let execute_engine_handle = tokio::spawn(async move {
-    //     execute_egine.run().await;
-    // });
+    let execute_engine_handle = tokio::spawn(async move {
+        execute_egine.run().await;
+    });
 
-    // let _ = tokio::try_join!(data_engine_handle, execute_engine_handle);
+    let _ = tokio::try_join!(data_engine_handle, execute_engine_handle);
 
     tokio::signal::ctrl_c()
         .await
