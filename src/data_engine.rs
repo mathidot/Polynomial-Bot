@@ -66,14 +66,17 @@ pub struct StreamProvider {
 }
 
 impl StreamProvider {
-    pub fn new<S>(s: S) -> Self
+    pub async fn new<S>(mut s: S) -> Self
     where
-        S: Stream<Item = Result<StreamMessage>>
-            + Sink<Value, Error = PolyfillError>
-            + Send
-            + Unpin
-            + 'static,
+        S: MarketStream,
     {
+        match s.connect().await {
+            Ok(_) => info!("stream is connecting"),
+            Err(e) => {
+                tracing::error!("stream fail to connect: {}", e);
+            }
+        }
+
         let (w, r) = s.split();
         let writer: Pin<Box<dyn Sink<Value, Error = PolyfillError> + Send>> = Box::pin(w);
         let reader: Pin<Box<dyn Stream<Item = Result<StreamMessage>> + Send>> = Box::pin(r);
@@ -124,7 +127,7 @@ impl DataEngine {
         let (token_tx, token_rx) = mpsc::unbounded_channel();
         let subscribe_provider: DashMap<WssChannelType, Arc<StreamProvider>> = DashMap::new();
         for chan in channels {
-            let provider = StreamProvider::new(chan.chan_stream);
+            let provider = StreamProvider::new(chan.chan_stream).await;
             subscribe_provider.insert(chan.chan_type, Arc::new(provider));
         }
 
@@ -230,7 +233,7 @@ impl DataEngine {
             return Ok(());
         }
         let mut order_book = OrderBook::new(token_id.clone(), 100);
-        order_book.set_tick_size(dec!(0.01))?;
+        order_book.set_tick_size(dec!(0.001))?;
         let book_snapshot = BookSnapshot {
             asset_id: book.asset_id,
             timestamp: book.timestamp,

@@ -420,6 +420,7 @@ impl OrderBook {
         // todo: the following validation is really needed?
         if let Some(tick_size) = tick_size_decimal {
             for bid in book_snapshot.bids {
+                debug!("bid_size: {}, tick_size:{}", bid.price, tick_size);
                 if !is_price_tick_aligned(bid.price, tick_size) {
                     return Err(PolyfillError::validation(
                         "price is not aligned with tick_size",

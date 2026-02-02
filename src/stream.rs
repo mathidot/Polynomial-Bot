@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Sleep, sleep};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
+
 /// Trait for market data streams
 #[async_trait]
 pub trait MarketStream:
@@ -134,20 +135,20 @@ impl WebSocketStream {
     }
 
     /// Connect to the WebSocket
-    async fn connect(&mut self) -> Result<()> {
-        let (ws_stream, _) = tokio_tungstenite::connect_async(&self.url)
-            .await
-            .map_err(|e| {
-                PolyfillError::stream(
-                    format!("WebSocket connection failed: {}", e),
-                    crate::errors::StreamErrorKind::ConnectionFailed,
-                )
-            })?;
+    // async fn connect(&mut self) -> Result<()> {
+    //     let (ws_stream, _) = tokio_tungstenite::connect_async(&self.url)
+    //         .await
+    //         .map_err(|e| {
+    //             PolyfillError::stream(
+    //                 format!("WebSocket connection failed: {}", e),
+    //                 crate::errors::StreamErrorKind::ConnectionFailed,
+    //             )
+    //         })?;
 
-        self.connection = Some(ws_stream);
-        info!("Connected to WebSocket stream at {}", self.url);
-        Ok(())
-    }
+    //     self.connection = Some(ws_stream);
+    //     info!("Connected to WebSocket stream at {}", self.url);
+    //     Ok(())
+    // }
 
     pub async fn init_and_split(
         mut self,
@@ -721,6 +722,35 @@ impl MarketStream for MockStream {
         Ok(())
     }
 }
+
+#[async_trait]
+impl MarketStream for Box<dyn MarketStream> {
+    /// Subscribe to market data for specific tokens
+    fn subscribe(&mut self, subscription: Subscription) -> Result<()> {
+        (**self).subscribe(subscription)
+    }
+
+    /// Unsubscribe from market data
+    fn unsubscribe(&mut self, token_ids: &[String]) -> Result<()> {
+        (**self).unsubscribe(token_ids)
+    }
+
+    /// Check if the stream is connected
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    /// Get connection statistics
+    fn get_stats(&self) -> StreamStats {
+        (**self).get_stats()
+    }
+
+    /// Connect
+    async fn connect(&mut self) -> Result<()> {
+        (**self).connect().await
+    }
+}
+
 /// Stream manager for handling multiple streams
 #[allow(dead_code)]
 pub struct StreamManager {
