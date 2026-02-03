@@ -166,6 +166,7 @@ pub mod fill;
 pub mod http_config;
 pub mod orders;
 pub mod rand;
+pub mod rist_manager;
 pub mod state;
 pub mod stream;
 pub mod types;
