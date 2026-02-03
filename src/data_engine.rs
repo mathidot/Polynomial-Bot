@@ -229,9 +229,6 @@ impl DataEngine {
     fn on_book(&self, book: BookMessage) -> Result<()> {
         info!("Handle BookMessage: {:?}", book.clone());
         let token_id = book.asset_id.clone();
-        if self.global_state.has_order_book(&book.asset_id)? {
-            return Ok(());
-        }
         let mut order_book = OrderBook::new(token_id.clone(), 100);
         order_book.set_tick_size(dec!(0.001))?;
         let book_snapshot = BookSnapshot {
