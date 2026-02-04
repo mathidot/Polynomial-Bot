@@ -161,6 +161,10 @@ pub struct TailEaterStrategy {
     pub buy_threshold: rust_decimal::Decimal,
     #[serde(with = "rust_decimal::serde::str")]
     pub max_slippage: rust_decimal::Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub trade_unit: rust_decimal::Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub buy_upper: rust_decimal::Decimal,
 }
 
 pub fn load_strategy_config() -> StrategyConfig {

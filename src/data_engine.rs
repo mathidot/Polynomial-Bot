@@ -227,7 +227,6 @@ impl DataEngine {
     }
 
     fn on_book(&self, book: BookMessage) -> Result<()> {
-        info!("Handle BookMessage: {:?}", book.clone());
         let token_id = book.asset_id.clone();
         let mut order_book = OrderBook::new(token_id.clone(), 100);
         order_book.set_tick_size(dec!(0.001))?;
@@ -253,10 +252,8 @@ impl DataEngine {
                     price: price,
                 };
 
-                info!("send token_info to execute_engine");
-
                 match self.token_info_tx.send(token_info) {
-                    Ok(()) => tracing::info!("translate token_info"),
+                    Ok(()) => (),
                     Err(_) => tracing::error!("err while translate token_info"),
                 };
             }

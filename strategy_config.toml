@@ -1,3 +1,5 @@
 [tail_eater]
-buy_threshold = "0.98"
+buy_threshold = "0.95"
 max_slippage = "0.005"
+trade_unit = "100"
+buy_upper = "0.98"
