@@ -103,6 +103,7 @@ pub use crate::types::{
     BookMessage,
     BookParams,
     BookSnapshot,
+    BookWithSequence,
     ClientConfig,
     ClientResult,
     FillEvent,
