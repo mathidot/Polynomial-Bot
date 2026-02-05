@@ -1,23 +1,18 @@
-use crate::book::OrderBook;
-use crate::common::{
-    CRYPTO_PATTERNS, MarketResponse, TokenResponse, TokenType, WEBSOCKET_MARKET_URL,
-};
+use crate::common::{CRYPTO_PATTERNS, MarketResponse, TokenResponse, TokenType};
 use crate::errors::{PolyfillError, Result, StreamErrorKind};
 use crate::state::GlobalState;
 use crate::types::{
-    BookMessage, OrderDelta, PriceChangeMessage, StreamMessage, TokenInfo, WssAuth, WssChannelType,
+    BookMessage, PriceChangeMessage, StreamMessage, TokenInfo, WssAuth, WssChannelType,
     WssSubscription,
 };
-use crate::{BookSnapshot, ClobClient, DEFAULT_BASE_URL, MarketStream, TokenApi};
-use chrono::Utc;
+use crate::{BookWithSequence, ClobClient, DEFAULT_BASE_URL, MarketStream, OrderDelta, TokenApi};
 use chrono::{DateTime, Datelike};
 use dashmap::{DashMap, DashSet};
-use futures::stream::{SplitSink, SplitStream};
 use futures::{Sink, SinkExt, Stream, StreamExt, future};
-use rust_decimal_macros::dec;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::atomic::AtomicU64;
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
@@ -114,13 +109,14 @@ pub struct DataEngine {
     token_tx: Arc<Mutex<mpsc::UnboundedSender<TokenResponse>>>,
     token_rx: Arc<Mutex<mpsc::UnboundedReceiver<TokenResponse>>>,
     subscribe_provider: DashMap<WssChannelType, Arc<StreamProvider>>,
-    global_state: Arc<GlobalState>,
+    global_state: Arc<std::sync::Mutex<GlobalState>>,
     token_info_tx: mpsc::UnboundedSender<TokenInfo>,
+    sequence: AtomicU64,
 }
 
 impl DataEngine {
     pub async fn new(
-        state: Arc<GlobalState>,
+        state: Arc<std::sync::Mutex<GlobalState>>,
         token_info_tx: mpsc::UnboundedSender<TokenInfo>,
         channels: Vec<SubscribedChannel>,
     ) -> Self {
@@ -139,6 +135,7 @@ impl DataEngine {
             subscribe_provider,
             global_state: state,
             token_info_tx: token_info_tx,
+            sequence: AtomicU64::new(0),
         }
     }
 
@@ -226,29 +223,12 @@ impl DataEngine {
         Ok(())
     }
 
-    fn on_book(&self, book: BookMessage) -> Result<()> {
-        let token_id = book.asset_id.clone();
-        let mut order_book = OrderBook::new(token_id.clone(), 100);
-        order_book.set_tick_size(dec!(0.001))?;
-        let book_snapshot = BookSnapshot {
-            asset_id: book.asset_id,
-            timestamp: book.timestamp,
-            asks: book.asks,
-            bids: book.bids,
-        };
-
-        order_book
-            .apply_book_snapshot(book_snapshot)
-            .inspect_err(|e| tracing::error!("apply_book_snapshot failed: {}", e))?;
-
-        self.global_state
-            .insert_order_book(order_book)
-            .map_err(|_| PolyfillError::internal_simple("fail to insert order_book"))?;
-
-        match self.global_state.get_price(&token_id) {
+    fn update_price(&self, token_id: String) -> Result<()> {
+        let lock = self.global_state.lock()?;
+        match lock.get_price(&token_id) {
             Ok(Some(price)) => {
                 let token_info = TokenInfo {
-                    token_id: token_id,
+                    token_id: token_id.to_string(),
                     price: price,
                 };
 
@@ -267,8 +247,47 @@ impl DataEngine {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    fn on_price_change(&self, price_changes: PriceChangeMessage) -> Result<()> {
+    fn on_book(&self, book: BookMessage) -> Result<()> {
+        tracing::debug!("on book: {:?}", book);
+        let token_id = book.asset_id.clone();
+        let book_with_sequence = BookWithSequence {
+            token_id: book.asset_id,
+            bids: book.bids,
+            asks: book.asks,
+            sequence: self.sequence.load(std::sync::atomic::Ordering::Relaxed),
+            timestamp: book.timestamp,
+        };
+        self.sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            let mut lock = self.global_state.lock()?;
+            lock.update_order_book(book_with_sequence)?;
+        }
+        self.update_price(token_id)?;
+        Ok(())
+    }
+
+    fn on_price_changes(&self, price_changes: PriceChangeMessage) -> Result<()> {
+        tracing::debug!("on price changes: {:?}", price_changes);
+        for change in price_changes.price_changes {
+            let token_id = change.asset_id.clone();
+            {
+                let mut lock = self.global_state.lock()?;
+                let delta = OrderDelta {
+                    token_id: change.asset_id,
+                    timestamp: DateTime::from_timestamp_millis(price_changes.timestamp as i64)
+                        .unwrap_or(chrono::Utc::now()),
+                    sequence: self.sequence.load(std::sync::atomic::Ordering::Relaxed),
+                    side: change.side,
+                    size: change.size,
+                    price: change.price,
+                };
+                self.sequence
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                lock.apply_delta(delta)?;
+            }
+            self.update_price(token_id)?;
+        }
         Ok(())
     }
 
@@ -285,13 +304,16 @@ impl DataEngine {
         while let Some(message) = provider.next().await {
             match message.clone() {
                 StreamMessage::Book(book) => {
-                    if let Err(_) = self.on_book(book) {
-                        tracing::error!("fail to handle book message");
+                    if let Err(e) = self.on_book(book) {
+                        tracing::error!("fail to handle book message: {}", e);
                         continue;
                     }
                 }
-                StreamMessage::PriceChange(price_change) => {
-                    // println!("receive price change: {:?}", price_change);
+                StreamMessage::PriceChange(price_changes) => {
+                    if let Err(e) = self.on_price_changes(price_changes) {
+                        tracing::error!("fail to handle price changes: {}", e);
+                        continue;
+                    }
                 }
                 StreamMessage::TickSizeChange(tick_size_change) => {
                     // println!("receive tick size change: {:?}", tick_size_change);
