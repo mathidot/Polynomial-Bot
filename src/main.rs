@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
     tracing::info!("🚀 Starting Polynomial Trading System...");
 
     let engine_config = config::load_engine_config();
-    let global_state = Arc::new(GlobalState::new());
+    let global_state = Arc::new(std::sync::Mutex::new(GlobalState::new()));
     let (tx, rx) = mpsc::unbounded_channel();
     let mut subscribed_channels = Vec::new();
 

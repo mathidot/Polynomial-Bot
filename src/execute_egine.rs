@@ -1,9 +1,11 @@
 use crate::OrderArgs;
+use crate::Result;
+use crate::book;
 use crate::client::ClobClient;
 use crate::config::StrategyConfig;
 use crate::fill::FillStatus;
 use crate::types::{MarketOrderRequest, TokenInfo};
-use crate::{FillEngine, GlobalState, OrderRequest, OrderType, Side};
+use crate::{FillEngine, GlobalState, Side};
 use rust_decimal_macros::dec;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -14,7 +16,7 @@ pub struct ExecuteEgine {
     token_rx: mpsc::UnboundedReceiver<TokenInfo>,
     config: StrategyConfig,
     fill_egine: FillEngine,
-    global_state: Arc<GlobalState>,
+    global_state: Arc<std::sync::Mutex<GlobalState>>,
 }
 
 impl ExecuteEgine {
@@ -23,7 +25,7 @@ impl ExecuteEgine {
         rx: mpsc::UnboundedReceiver<TokenInfo>,
         cfg: StrategyConfig,
         fill: FillEngine,
-        state: Arc<GlobalState>,
+        state: Arc<std::sync::Mutex<GlobalState>>,
     ) -> Self {
         Self {
             client,
@@ -34,7 +36,7 @@ impl ExecuteEgine {
         }
     }
 
-    async fn on_tick(&mut self) {
+    async fn on_tick(&mut self) -> crate::Result<()> {
         while let Some(token_info) = self.token_rx.recv().await {
             let strategy_cfg = &self.config.tail_eater;
             let token_id = &token_info.token_id;
@@ -48,16 +50,6 @@ impl ExecuteEgine {
                 continue;
             }
 
-            info!(
-                "Signal triggered for {}: price {} >= threshold {}",
-                token_id, signal_price, strategy_cfg.buy_threshold
-            );
-
-            let Ok(book) = self.global_state.get_book(token_id) else {
-                warn!("Order book not found for token: {}", token_id);
-                continue;
-            };
-
             let order_request = MarketOrderRequest {
                 token_id: token_id.clone(),
                 side: Side::BUY,
@@ -68,6 +60,21 @@ impl ExecuteEgine {
                     token_id,
                     chrono::Utc::now().timestamp_millis()
                 )),
+            };
+
+            info!(
+                "Signal triggered for {}: price {} >= threshold {}",
+                token_id, signal_price, strategy_cfg.buy_threshold
+            );
+            let book = {
+                let lock = self.global_state.lock()?;
+                match lock.get_book(token_id) {
+                    Ok(book) => book.clone(),
+                    Err(_) => {
+                        warn!("Order book not found for token: {}", token_id);
+                        continue;
+                    }
+                }
             };
 
             let simulation = match self.fill_egine.execute_market_order(&order_request, &book) {
@@ -120,10 +127,11 @@ impl ExecuteEgine {
                 }
             }
         }
+        Ok(())
     }
 
-    pub async fn run(&mut self) {
+    pub async fn run(&mut self) -> Result<()> {
         info!("TailEater ExecuteEngine started");
-        self.on_tick().await;
+        self.on_tick().await
     }
 }
