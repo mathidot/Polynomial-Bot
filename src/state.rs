@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::sync::{
-    Arc, RwLock,
+    Arc,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -16,14 +16,14 @@ pub struct PriceInfo {
 }
 pub struct GlobalState {
     tokens: DashMap<String, PriceInfo>,
-    book_manager: Arc<RwLock<OrderBookManager>>,
+    book_manager: Arc<OrderBookManager>, // Removed RwLock as OrderBookManager is now thread-safe internally
 }
 
 impl GlobalState {
     pub fn new() -> Self {
         Self {
             tokens: DashMap::new(),
-            book_manager: Arc::new(RwLock::new(OrderBookManager::new(100))),
+            book_manager: Arc::new(OrderBookManager::new(100)),
         }
     }
 
@@ -46,39 +46,24 @@ impl GlobalState {
     }
 
     pub fn insert_order_book(&self, book: OrderBook) -> Result<()> {
-        let mut books = self.book_manager.write().map_err(|_| {
-            PolyfillError::internal_simple("fail to accquire BookManager write lock")
-        })?;
-        books.insert(book)?;
+        self.book_manager.insert(book)?;
         Ok(())
     }
 
     pub fn has_order_book(&self, token_id: &str) -> Result<bool> {
-        let books = self
-            .book_manager
-            .read()
-            .map_err(|_| PolyfillError::internal_simple("fail to acquire BookManager read lock"))?;
-        books.is_exist(token_id)
+        self.book_manager.is_exist(token_id)
     }
 
     pub fn get_book(&self, token_id: &str) -> Result<crate::book::OrderBook> {
-        let books = self
-            .book_manager
-            .read()
-            .map_err(|_| PolyfillError::internal_simple("fail to acquire BookManager read lock"))?;
-        books.get_book(&token_id)
+        self.book_manager.get_book(token_id)
     }
 
     pub fn get_price(&self, token_id: &str) -> Result<Option<Decimal>> {
-        let books = self
-            .book_manager
-            .read()
-            .map_err(|_| PolyfillError::internal_simple("fail to acquire BookManager read lock"))?;
-        let book = books.get_book(token_id)?;
+        let book = self.book_manager.get_book(token_id)?;
         Ok(book.mid_price())
     }
 
-    pub fn update_order_book(&mut self, book: BookWithSequence) -> Result<()> {
+    pub fn update_order_book(&self, book: BookWithSequence) -> Result<()> {
         let token_id = book.token_id.clone();
         let mut order_book = OrderBook::new(token_id.clone(), 100);
         order_book.set_tick_size(dec!(0.001))?;
@@ -97,11 +82,8 @@ impl GlobalState {
         self.insert_order_book(order_book)
     }
 
-    pub fn apply_delta(&mut self, delta: OrderDelta) -> Result<()> {
-        let books = self.book_manager.write().map_err(|_| {
-            PolyfillError::internal_simple("fail to accquire BookManager write lock")
-        })?;
-        books.apply_delta(delta)?;
+    pub fn apply_delta(&self, delta: OrderDelta) -> Result<()> {
+        self.book_manager.apply_delta(delta)?;
         Ok(())
     }
 }

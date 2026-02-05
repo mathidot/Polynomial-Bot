@@ -36,94 +36,112 @@ impl ExecuteEgine {
         }
     }
 
+    pub fn try_generate_order(&mut self, token_info: &TokenInfo) -> Result<Option<OrderArgs>> {
+        let strategy_cfg = &self.config.tail_eater;
+        let token_id = &token_info.token_id;
+        let signal_price = token_info.price;
+
+        if signal_price < strategy_cfg.buy_threshold {
+            return Ok(None);
+        }
+
+        if signal_price > strategy_cfg.buy_upper {
+            return Ok(None);
+        }
+
+        let order_request = MarketOrderRequest {
+            token_id: token_id.clone(),
+            side: Side::BUY,
+            amount: strategy_cfg.trade_unit,
+            slippage_tolerance: Some(strategy_cfg.max_slippage),
+            client_id: Some(format!(
+                "te_{}_{}",
+                token_id,
+                chrono::Utc::now().timestamp_millis()
+            )),
+        };
+
+        info!(
+            "Signal triggered for {}: price {} >= threshold {}",
+            token_id, signal_price, strategy_cfg.buy_threshold
+        );
+        let book = {
+            let lock = self.global_state.lock()?;
+            match lock.get_book(token_id) {
+                Ok(book) => book.clone(),
+                Err(_) => {
+                    warn!("Order book not found for token: {}", token_id);
+                    return Ok(None);
+                }
+            }
+        };
+
+        let simulation = match self.fill_egine.execute_market_order(&order_request, &book) {
+            Ok(res) => res,
+            Err(e) => {
+                error!("Simulation execution error: {:?}", e);
+                return Ok(None);
+            }
+        };
+
+        match simulation.status {
+            FillStatus::Filled | FillStatus::Partial => {
+                let avg_price = simulation.average_price;
+                let actual_slippage = if avg_price > signal_price {
+                    (avg_price - signal_price) / signal_price
+                } else {
+                    dec!(0)
+                };
+
+                if actual_slippage > strategy_cfg.max_slippage {
+                    warn!(
+                        "Simulation rejected: slippage too high ({} > {})",
+                        actual_slippage, strategy_cfg.max_slippage
+                    );
+                    return Ok(None);
+                }
+
+                info!(
+                    "Simulation passed: avg_price={}, size={}, status={:?}",
+                    avg_price, simulation.total_size, simulation.status
+                );
+
+                // Use the simulation's average price (or slightly better if possible) for the limit order
+                // to ensure we cross the spread and get filled.
+                // For a BUY order, using the higher avg_price ensures we match the asks we simulated against.
+                let execution_price = avg_price;
+
+                let args = OrderArgs {
+                    token_id: token_id.clone(),
+                    price: execution_price,
+                    size: strategy_cfg.trade_unit,
+                    side: Side::BUY,
+                };
+
+                Ok(Some(args))
+            }
+            _ => {
+                info!(
+                    "Simulation did not result in a fill: {:?}",
+                    simulation.status
+                );
+                Ok(None)
+            }
+        }
+    }
+
     async fn on_tick(&mut self) -> crate::Result<()> {
         while let Some(token_info) = self.token_rx.recv().await {
-            let strategy_cfg = &self.config.tail_eater;
-            let token_id = &token_info.token_id;
-            let signal_price = token_info.price;
-
-            if signal_price < strategy_cfg.buy_threshold {
-                continue;
-            }
-
-            if signal_price > strategy_cfg.buy_upper {
-                continue;
-            }
-
-            let order_request = MarketOrderRequest {
-                token_id: token_id.clone(),
-                side: Side::BUY,
-                amount: strategy_cfg.trade_unit,
-                slippage_tolerance: Some(strategy_cfg.max_slippage),
-                client_id: Some(format!(
-                    "te_{}_{}",
-                    token_id,
-                    chrono::Utc::now().timestamp_millis()
-                )),
-            };
-
-            info!(
-                "Signal triggered for {}: price {} >= threshold {}",
-                token_id, signal_price, strategy_cfg.buy_threshold
-            );
-            let book = {
-                let lock = self.global_state.lock()?;
-                match lock.get_book(token_id) {
-                    Ok(book) => book.clone(),
-                    Err(_) => {
-                        warn!("Order book not found for token: {}", token_id);
-                        continue;
-                    }
-                }
-            };
-
-            let simulation = match self.fill_egine.execute_market_order(&order_request, &book) {
-                Ok(res) => res,
-                Err(e) => {
-                    error!("Simulation execution error: {:?}", e);
-                    continue;
-                }
-            };
-
-            match simulation.status {
-                FillStatus::Filled | FillStatus::Partial => {
-                    let avg_price = simulation.average_price;
-                    let actual_slippage = if avg_price > signal_price {
-                        (avg_price - signal_price) / signal_price
-                    } else {
-                        dec!(0)
-                    };
-
-                    if actual_slippage > strategy_cfg.max_slippage {
-                        warn!(
-                            "Simulation rejected: slippage too high ({} > {})",
-                            actual_slippage, strategy_cfg.max_slippage
-                        );
-                        continue;
-                    }
-
-                    info!(
-                        "Simulation passed: avg_price={}, size={}, status={:?}",
-                        avg_price, simulation.total_size, simulation.status
-                    );
-
-                    let args = OrderArgs {
-                        token_id: token_id.clone(),
-                        price: signal_price,
-                        size: strategy_cfg.trade_unit,
-                        side: Side::BUY,
-                    };
-
+            match self.try_generate_order(&token_info) {
+                Ok(Some(args)) => {
                     match self.client.create_and_post_order(&args).await {
                         Ok(order_id) => info!("Successfully posted order. ID: {:?}", order_id),
                         Err(e) => error!("API Error posting order: {:?}", e),
                     }
                 }
-                _ => {
-                    info!(
-                        "Simulation did not result in a fill: {:?}",
-                        simulation.status
-                    );
+                Ok(None) => {}
+                Err(e) => {
+                    error!("Error generating order: {:?}", e);
                 }
             }
         }

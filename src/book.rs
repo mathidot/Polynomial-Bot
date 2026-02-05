@@ -775,6 +775,8 @@ pub struct MarketImpact {
     pub size_filled: Decimal,   // How much of your order got filled
 }
 
+use dashmap::DashMap;
+
 /// Thread-safe order book manager
 /// This manages multiple order books (one per token) and handles concurrent access
 /// Multiple threads can read/write different books simultaneously
@@ -787,7 +789,7 @@ pub struct MarketImpact {
 /// With depth limiting: 1000 tokens × 50 levels × 32 bytes = 1.6MB (20x less memory)
 #[derive(Debug)]
 pub struct OrderBookManager {
-    books: Arc<RwLock<std::collections::HashMap<String, OrderBook>>>, // Token ID -> OrderBook
+    books: Arc<DashMap<String, OrderBook>>, // Token ID -> OrderBook
     max_depth: usize,
 }
 
@@ -796,33 +798,23 @@ impl OrderBookManager {
     /// Starts with an empty collection of books
     pub fn new(max_depth: usize) -> Self {
         Self {
-            books: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            books: Arc::new(DashMap::new()),
             max_depth,
         }
     }
 
     pub fn is_exist(&self, token_id: &str) -> Result<bool> {
-        let books = self
-            .books
-            .read()
-            .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
-        Ok(books.contains_key(token_id))
+        Ok(self.books.contains_key(token_id))
     }
 
     /// Get or create an order book for a token
     /// If we don't have a book for this token yet, create a new empty one
     pub fn get_or_create_book(&self, token_id: &str) -> Result<OrderBook> {
-        let mut books = self
-            .books
-            .write()
-            .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
-
-        if let Some(book) = books.get(token_id) {
-            Ok(book.clone()) // Return a copy of the existing book
+        if let Some(book) = self.books.get(token_id) {
+            Ok(book.clone())
         } else {
-            // Create a new book for this token
             let book = OrderBook::new(token_id.to_string(), self.max_depth);
-            books.insert(token_id.to_string(), book.clone());
+            self.books.insert(token_id.to_string(), book.clone());
             Ok(book)
         }
     }
@@ -830,13 +822,7 @@ impl OrderBookManager {
     /// Update a book with a delta
     /// This is called when we receive real-time updates from the exchange
     pub fn apply_delta(&self, delta: OrderDelta) -> Result<()> {
-        let mut books = self
-            .books
-            .write()
-            .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
-
-        // Find the book for this token (must already exist)
-        let book = books.get_mut(&delta.token_id).ok_or_else(|| {
+        let mut book = self.books.get_mut(&delta.token_id).ok_or_else(|| {
             PolyfillError::market_data(
                 format!("No book found for token: {}", delta.token_id),
                 crate::errors::MarketDataErrorKind::TokenNotFound,
@@ -850,12 +836,7 @@ impl OrderBookManager {
     /// Get a book snapshot
     /// Returns a copy of the current book state that won't change
     pub fn get_book_snapshot(&self, token_id: &str) -> Result<crate::types::OrderBook> {
-        let books = self
-            .books
-            .read()
-            .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
-
-        books
+        self.books
             .get(token_id)
             .map(|book| book.snapshot()) // Create a snapshot copy
             .ok_or_else(|| {
@@ -869,26 +850,16 @@ impl OrderBookManager {
     /// Get all available books
     /// Returns snapshots of every book we're currently tracking
     pub fn get_all_books(&self) -> Result<Vec<crate::types::OrderBook>> {
-        let books = self
-            .books
-            .read()
-            .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
-
-        Ok(books.values().map(|book| book.snapshot()).collect())
+        Ok(self.books.iter().map(|book| book.snapshot()).collect())
     }
 
     /// Remove stale books
     /// Cleans up books that haven't been updated recently (probably disconnected)
     /// This prevents memory leaks from accumulating dead books
     pub fn cleanup_stale_books(&self, max_age: std::time::Duration) -> Result<usize> {
-        let mut books = self
-            .books
-            .write()
-            .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
-
-        let initial_count = books.len();
-        books.retain(|_, book| !book.is_stale(max_age)); // Keep only non-stale books
-        let removed = initial_count - books.len();
+        let initial_count = self.books.len();
+        self.books.retain(|_, book| !book.is_stale(max_age)); // Keep only non-stale books
+        let removed = initial_count - self.books.len();
 
         if removed > 0 {
             debug!("Removed {} stale order books", removed);
@@ -899,23 +870,14 @@ impl OrderBookManager {
 
     /// Insert order book
     /// If there has already exists a book, just replace it
-    pub fn insert(&mut self, book: OrderBook) -> Result<()> {
-        let mut books = self
-            .books
-            .write()
-            .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
-        books.insert(book.token_id.clone(), book);
+    pub fn insert(&self, book: OrderBook) -> Result<()> {
+        self.books.insert(book.token_id.clone(), book);
         Ok(())
     }
 
     /// Get OrderBook reference
     pub fn get_book(&self, token_id: &str) -> Result<OrderBook> {
-        let books = self
-            .books
-            .read()
-            .map_err(|_| PolyfillError::internal_simple("Failed to acquire book lock"))?;
-
-        books.get(token_id).cloned().ok_or_else(|| {
+        self.books.get(token_id).map(|b| b.clone()).ok_or_else(|| {
             PolyfillError::market_data(
                 format!("No book found for token: {}", token_id),
                 crate::errors::MarketDataErrorKind::TokenNotFound,

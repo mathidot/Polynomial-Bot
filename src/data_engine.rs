@@ -2,8 +2,9 @@ use crate::common::{CRYPTO_PATTERNS, MarketResponse, TokenResponse, TokenType};
 use crate::errors::{PolyfillError, Result, StreamErrorKind};
 use crate::state::GlobalState;
 use crate::types::{
-    BookMessage, PriceChangeMessage, StreamMessage, TokenInfo, WssAuth, WssChannelType,
-    WssSubscription,
+    BestBidAskMessage, BookMessage, LastTradePriceMessage, MarketResolvedMessage, NewMarketMessage,
+    OrderMessage, PriceChangeMessage, StreamMessage, TickSizeChangeMessage, TokenInfo, TradeMessage,
+    WssAuth, WssChannelType, WssSubscription,
 };
 use crate::{BookWithSequence, ClobClient, DEFAULT_BASE_URL, MarketStream, OrderDelta, TokenApi};
 use chrono::{DateTime, Datelike};
@@ -40,10 +41,10 @@ pub fn parse_market(market: MarketResponse) -> Vec<TokenResponse> {
         .iter()
         .enumerate()
         .zip(market.outcomes.iter())
-        .map(|((i, id), outcome)| TokenResponse {
+        .map(|((_i, id), outcome)| TokenResponse {
             token_id: id.clone(),
             outcome: outcome.clone(),
-            winner: { if i == 0 { true } else { false } },
+            winner: outcome.to_lowercase() == "yes", // Correctly identify winner based on outcome text
             is_valid: true,
             token_type: TokenType::default(),
         })
@@ -291,6 +292,77 @@ impl DataEngine {
         Ok(())
     }
 
+    fn on_tick_size_change(&self, msg: TickSizeChangeMessage) -> Result<()> {
+        tracing::debug!("on tick size change: {:?}", msg);
+        let token_id = msg.asset_id.clone();
+
+        let mut book = {
+            let lock = self.global_state.lock()?;
+            lock.get_book(&token_id)?
+        };
+
+        book.set_tick_size(msg.new_tick_size)?;
+
+        {
+            let lock = self.global_state.lock()?;
+            lock.insert_order_book(book)?;
+        }
+        Ok(())
+    }
+
+    fn on_last_trade_price(&self, msg: LastTradePriceMessage) -> Result<()> {
+        tracing::info!("Last trade price for {}: {}", msg.asset_id, msg.price);
+        Ok(())
+    }
+
+    fn on_best_bid_ask(&self, msg: BestBidAskMessage) -> Result<()> {
+        tracing::debug!("on best bid ask: {:?}", msg);
+        let token_id = msg.asset_id.clone();
+        {
+            let lock = self.global_state.lock()?;
+            lock.update_ask_price(token_id.clone(), msg.best_ask);
+            lock.update_bid_price(token_id.clone(), msg.best_bid);
+        }
+        Ok(())
+    }
+
+    fn on_new_market(&self, msg: NewMarketMessage) -> Result<()> {
+        tracing::info!("New market created: {} ({})", msg.question, msg.market);
+        Ok(())
+    }
+
+    fn on_market_resolved(&self, msg: MarketResolvedMessage) -> Result<()> {
+        tracing::info!(
+            "Market resolved: {} - Winner: {} ({})",
+            msg.question,
+            msg.winning_outcome,
+            msg.winning_asset_id
+        );
+        Ok(())
+    }
+
+    fn on_trade(&self, msg: TradeMessage) -> Result<()> {
+        tracing::info!(
+            "Trade executed: ID={}, Side={:?}, Price={}, Size={}",
+            msg.id,
+            msg.side,
+            msg.price,
+            msg.size
+        );
+        Ok(())
+    }
+
+    fn on_order(&self, msg: OrderMessage) -> Result<()> {
+        tracing::info!(
+            "Order update: ID={}, Status={}, Price={}, Size={}",
+            msg.id,
+            msg.order_type,
+            msg.price,
+            msg.size_matched
+        );
+        Ok(())
+    }
+
     async fn handle_message(&self) -> Result<()> {
         let provider = match self.subscribe_provider.get_mut(&WssChannelType::Crypto) {
             Some(provider) => provider.clone(),
@@ -302,7 +374,7 @@ impl DataEngine {
             }
         };
         while let Some(message) = provider.next().await {
-            match message.clone() {
+            match message {
                 StreamMessage::Book(book) => {
                     if let Err(e) = self.on_book(book) {
                         tracing::error!("fail to handle book message: {}", e);
@@ -316,25 +388,46 @@ impl DataEngine {
                     }
                 }
                 StreamMessage::TickSizeChange(tick_size_change) => {
-                    // println!("receive tick size change: {:?}", tick_size_change);
+                    if let Err(e) = self.on_tick_size_change(tick_size_change) {
+                        tracing::error!("fail to handle tick size change: {}", e);
+                        continue;
+                    }
                 }
                 StreamMessage::LastTradePrice(last_trade_price) => {
-                    // println!("receive last trade price: {:?}", last_trade_price);
+                    if let Err(e) = self.on_last_trade_price(last_trade_price) {
+                        tracing::error!("fail to handle last trade price: {}", e);
+                        continue;
+                    }
                 }
                 StreamMessage::BestBidAsk(best_bid_ask) => {
-                    // println!("receive best bid ask: {:?}", best_bid_ask);
+                    if let Err(e) = self.on_best_bid_ask(best_bid_ask) {
+                        tracing::error!("fail to handle best bid ask: {}", e);
+                        continue;
+                    }
                 }
                 StreamMessage::NewMarket(new_market) => {
-                    // println!("receive new market: {:?}", new_market);
+                    if let Err(e) = self.on_new_market(new_market) {
+                        tracing::error!("fail to handle new market: {}", e);
+                        continue;
+                    }
                 }
                 StreamMessage::MarketResolved(market_resolved) => {
-                    // println!("receive market resolved: {:?}", market_resolved);
+                    if let Err(e) = self.on_market_resolved(market_resolved) {
+                        tracing::error!("fail to handle market resolved: {}", e);
+                        continue;
+                    }
                 }
                 StreamMessage::Trade(trade) => {
-                    // println!("receive trade: {:?}", trade);
+                    if let Err(e) = self.on_trade(trade) {
+                        tracing::error!("fail to handle trade: {}", e);
+                        continue;
+                    }
                 }
                 StreamMessage::Order(order) => {
-                    // println!("receive order: {:?}", order);
+                    if let Err(e) = self.on_order(order) {
+                        tracing::error!("fail to handle order: {}", e);
+                        continue;
+                    }
                 }
                 _ => {}
             }
