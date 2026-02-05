@@ -90,9 +90,11 @@ level = "info"              # 日志级别 (trace, debug, info, warn, error)
 cargo run --release
 ```
 
-## 🏗️ 架构概览
+## 🏗️ 架构概览与核心路径
 
-系统主要由以下核心组件构成：
+系统主要由以下核心组件构成，并遵循严格的数据流处理路径：
+
+### 核心组件
 
 1.  **WebSocketStream (Stream Actor)**:
     *   负责维护与 Polymarket 的 WebSocket 连接。
@@ -109,6 +111,43 @@ cargo run --release
     *   运行策略逻辑（如 Tail Eater）。
     *   在本地订单簿上进行预执行模拟（Simulation），检查滑点。
     *   通过 `ClobClient` 向交易所发送实际订单。
+
+### 核心交易路径 (Message to Order)
+
+从接收市场消息到完成下单的完整路径如下：
+
+1.  **消息接收 (Stream Layer)**:
+    *   `WebSocketStream` 接收 JSON 数据 -> 反序列化为 `StreamMessage` -> `StreamProvider` 分发。
+
+2.  **状态更新 (Data Engine)**:
+    *   `DataEngine` 获取 `GlobalState` 锁 -> 更新内存中的 `OrderBook` -> 提取最新价格 -> 发送 `TokenInfo` 信号。
+
+3.  **策略决策 (Execute Engine)**:
+    *   `ExecuteEngine` 收到信号 -> 检查阈值 (`buy_threshold`) -> 再次获取 `GlobalState` 锁读取 `OrderBook` -> 调用 `FillEngine` 进行模拟撮合 -> 计算预期滑点 -> 通过/拒绝。
+
+4.  **下单执行 (Client Layer)**:
+    *   构建订单参数 -> `ClobClient` 进行 EIP-712 签名 -> 发送 HTTP POST 请求 -> 返回 Order ID。
+
+## ⚡ 性能基准测试 (Benchmarks)
+
+本项目包含性能基准测试，用于验证核心路径的延迟。
+
+### 运行测试
+
+```bash
+cargo bench --bench full_path_benchmark
+```
+
+### 测试结果示例
+
+针对“数据更新 -> 策略决策 -> 模拟撮合”的全路径测试（不含网络 IO）：
+
+```
+full_execution_path     time:   [14.789 µs 15.028 µs 15.285 µs]
+```
+
+*   **平均延迟**: ~15 微秒 (0.015ms)
+*   **测试范围**: 包含状态锁竞争、OrderBook 更新、定点数计算、策略逻辑判断及本地模拟撮合。
 
 ## ⚠️ 注意事项
 
