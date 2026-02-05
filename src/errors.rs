@@ -4,8 +4,9 @@
 //! for clear error handling in trading environments where fast error recovery
 //! is critical.
 
-use std::time::Duration;
+use std::{sync::PoisonError, time::Duration};
 use thiserror::Error;
+use url::Position;
 
 /// Main error type for the Polymarket client
 #[derive(Error, Debug)]
@@ -333,20 +334,20 @@ impl PolyfillError {
 }
 
 // Implement From for common external error types
-// impl From<reqwest::Error> for PolyfillError {
-//     fn from(err: reqwest::Error) -> Self {
-//         if err.is_timeout() {
-//             PolyfillError::Timeout {
-//                 duration: Duration::from_secs(30), // default timeout
-//                 operation: "HTTP request".to_string(),
-//             }
-//         } else if err.is_connect() || err.is_request() {
-//             PolyfillError::network("HTTP request failed", err)
-//         } else {
-//             PolyfillError::internal("Unexpected reqwest error", err)
-//         }
-//     }
-// }
+impl From<reqwest::Error> for PolyfillError {
+    fn from(err: reqwest::Error) -> Self {
+        if err.is_timeout() {
+            PolyfillError::Timeout {
+                duration: Duration::from_secs(30), // default timeout
+                operation: "HTTP request".to_string(),
+            }
+        } else if err.is_connect() || err.is_request() {
+            PolyfillError::network("HTTP request failed", err)
+        } else {
+            PolyfillError::internal("Unexpected reqwest error", err)
+        }
+    }
+}
 
 impl From<serde_json::Error> for PolyfillError {
     fn from(err: serde_json::Error) -> Self {
@@ -357,11 +358,11 @@ impl From<serde_json::Error> for PolyfillError {
     }
 }
 
-// impl From<url::ParseError> for PolyfillError {
-//     fn from(err: url::ParseError) -> Self {
-//         PolyfillError::config(format!("Invalid URL: {}", err))
-//     }
-// }
+impl From<url::ParseError> for PolyfillError {
+    fn from(err: url::ParseError) -> Self {
+        PolyfillError::config(format!("Invalid URL: {}", err))
+    }
+}
 
 impl From<tokio_tungstenite::tungstenite::Error> for PolyfillError {
     fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {
@@ -378,12 +379,9 @@ impl From<tokio_tungstenite::tungstenite::Error> for PolyfillError {
     }
 }
 
-impl From<reqwest::Error> for PolyfillError {
-    fn from(err: reqwest::Error) -> Self {
-        PolyfillError::Http {
-            message: err.to_string(),
-            source: Some(err),
-        }
+impl<T> From<PoisonError<T>> for PolyfillError {
+    fn from(err: PoisonError<T>) -> Self {
+        PolyfillError::internal_simple(format!("Lock poisoned: {}", err))
     }
 }
 
