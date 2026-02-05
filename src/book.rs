@@ -406,7 +406,7 @@ impl OrderBook {
     /// apply bid and ask to order book at one time
     /// due to bid and ask from the same order book
     pub fn apply_book_snapshot(&mut self, book_snapshot: BookSnapshot) -> Result<()> {
-        if book_snapshot.timestamp <= self.sequence {
+        if book_snapshot.sequence <= self.sequence {
             trace!(
                 "Ignoring stale delta: {} <= {}",
                 book_snapshot.timestamp, self.sequence
