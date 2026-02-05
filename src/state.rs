@@ -1,8 +1,10 @@
-use crate::OrderBookManager;
 use crate::book::OrderBook;
+use crate::types::PriceChange;
+use crate::{BookMessage, BookSnapshot, BookWithSequence, OrderBookManager, OrderDelta};
 use crate::{PolyfillError, Result};
 use dashmap::DashMap;
 use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 use std::sync::{
     Arc, RwLock,
     atomic::{AtomicU64, Ordering},
@@ -74,5 +76,32 @@ impl GlobalState {
             .map_err(|_| PolyfillError::internal_simple("fail to acquire BookManager read lock"))?;
         let book = books.get_book(token_id)?;
         Ok(book.mid_price())
+    }
+
+    pub fn update_order_book(&mut self, book: BookWithSequence) -> Result<()> {
+        let token_id = book.token_id.clone();
+        let mut order_book = OrderBook::new(token_id.clone(), 100);
+        order_book.set_tick_size(dec!(0.001))?;
+        let book_snapshot = BookSnapshot {
+            asset_id: book.token_id,
+            timestamp: book.timestamp,
+            asks: book.asks,
+            bids: book.bids,
+            sequence: book.sequence,
+        };
+
+        order_book
+            .apply_book_snapshot(book_snapshot)
+            .inspect_err(|e| tracing::error!("apply_book_snapshot failed: {}", e))?;
+
+        self.insert_order_book(order_book)
+    }
+
+    pub fn apply_delta(&mut self, delta: OrderDelta) -> Result<()> {
+        let books = self.book_manager.write().map_err(|_| {
+            PolyfillError::internal_simple("fail to accquire BookManager write lock")
+        })?;
+        books.apply_delta(delta)?;
+        Ok(())
     }
 }
