@@ -191,7 +191,9 @@ pub fn is_price_tick_aligned(decimal: Decimal, tick_size_decimal: Decimal) -> bo
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum Side {
+    #[serde(alias = "BUY")]
     BUY = 0,
+    #[serde(alias = "SELL")]
     SELL = 1,
 }
 
@@ -714,6 +716,7 @@ pub struct BookSnapshot {
     pub timestamp: u64,
     pub bids: Vec<OrderSummary>,
     pub asks: Vec<OrderSummary>,
+    pub sequence: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -731,7 +734,7 @@ pub struct PriceChange {
     pub price: Decimal,
     #[serde(with = "rust_decimal::serde::str")]
     pub size: Decimal,
-    pub side: String,
+    pub side: Side,
     pub hash: String,
     #[serde(with = "rust_decimal::serde::str")]
     pub best_bid: Decimal,
@@ -762,7 +765,7 @@ pub struct TickSizeChangeMessage {
     pub old_tick_size: Decimal,
     #[serde(with = "rust_decimal::serde::str")]
     pub new_tick_size: Decimal,
-    pub side: String,
+    pub side: Side,
     #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
     pub timestamp: u64,
 }
@@ -777,7 +780,7 @@ pub struct LastTradePriceMessage {
     pub fee_rate_bps: Decimal,
     #[serde(with = "rust_decimal::serde::str")]
     pub price: Decimal,
-    pub side: String,
+    pub side: Side,
     #[serde(with = "rust_decimal::serde::str")]
     pub size: Decimal,
     #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
@@ -861,7 +864,7 @@ pub struct TradeMessage {
     pub owner: String,
     #[serde(with = "rust_decimal::serde::str")]
     pub price: Decimal,
-    pub side: String,
+    pub side: Side,
     #[serde(with = "rust_decimal::serde::str")]
     pub size: Decimal,
     pub status: String,
@@ -901,7 +904,7 @@ pub struct OrderMessage {
     pub owner: String,
     #[serde(with = "rust_decimal::serde::str")]
     pub price: Decimal,
-    pub side: String,
+    pub side: Side,
     #[serde(with = "rust_decimal::serde::str")]
     pub size_matched: Decimal,
     #[serde(deserialize_with = "crate::decode::deserializers::number_from_string")]
@@ -1299,12 +1302,22 @@ pub struct TokenInfo {
 }
 
 impl TokenInfo {
-    pub fn new(id: String, side: Side, p: Decimal) -> Self {
+    pub fn new(id: String, p: Decimal) -> Self {
         Self {
             token_id: id,
             price: p,
         }
     }
+}
+
+/// Simpler BookMessage with sequence
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BookWithSequence {
+    pub token_id: String,
+    pub bids: Vec<OrderSummary>,
+    pub asks: Vec<OrderSummary>,
+    pub sequence: u64,
+    pub timestamp: u64,
 }
 
 // For compatibility with reference implementation
