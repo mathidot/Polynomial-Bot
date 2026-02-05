@@ -1,3 +1,4 @@
+use crate::Side;
 use crate::types::{
     BestBidAskMessage, BookMessage, EventMessage, LastTradePriceMessage, MarketOrder,
     MarketResolvedMessage, NewMarketMessage, OrderMessage, OrderSummary, PriceChange,
@@ -47,7 +48,11 @@ impl Distribution<BookMessage> for StandardUniform {
 
 impl Distribution<PriceChange> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> PriceChange {
-        let side = if rng.random_bool(0.5) { "BUY" } else { "SELL" }.to_string();
+        let side = if rng.random_bool(0.5) {
+            Side::BUY
+        } else {
+            Side::SELL
+        };
         let price = Decimal::new(rng.random_range(1..100), 2);
         let best_bid = Decimal::new(rng.random_range(1..100), 2);
         let best_ask = Decimal::new(rng.random_range(1..100), 2);
@@ -84,7 +89,11 @@ impl Distribution<TickSizeChangeMessage> for StandardUniform {
             market: format!("0x{}", generate_random_hex(rng, 40)),
             old_tick_size: Decimal::new(rng.random_range(1..1000), 3),
             new_tick_size: Decimal::new(rng.random_range(1..1000), 3),
-            side: if rng.random_bool(0.5) { "BUY" } else { "SELL" }.to_string(),
+            side: if rng.random_bool(0.5) {
+                Side::BUY
+            } else {
+                Side::SELL
+            },
             timestamp: Utc::now().timestamp_millis() as u64,
         }
     }
@@ -97,7 +106,11 @@ impl Distribution<LastTradePriceMessage> for StandardUniform {
             market: format!("0x{}", generate_random_hex(rng, 40)),
             fee_rate_bps: Decimal::new(0, 0),
             price: Decimal::new(rng.random_range(1..100), 2),
-            side: if rng.random_bool(0.5) { "BUY" } else { "SELL" }.to_string(),
+            side: if rng.random_bool(0.5) {
+                Side::BUY
+            } else {
+                Side::SELL
+            },
             size: Decimal::new(rng.random_range(1..1000), 0),
             timestamp: Utc::now().timestamp_millis() as u64,
         }
@@ -198,7 +211,11 @@ impl Distribution<TradeMessage> for StandardUniform {
             last_update: now,
             matchtime: now,
             timestamp: now,
-            side: if rng.random_bool(0.5) { "BUY" } else { "SELL" }.to_string(),
+            side: if rng.random_bool(0.5) {
+                Side::BUY
+            } else {
+                Side::SELL
+            },
             status: "FILLED".to_string(),
             outcome: if rng.random_bool(0.5) { "Yes" } else { "No" }.to_string(),
             trade_type: "TRADE".to_string(),
@@ -228,7 +245,11 @@ impl Distribution<OrderMessage> for StandardUniform {
             original_size: Decimal::new(original_size_raw, 1),
             size_matched: Decimal::new(matched_size_raw, 1),
             price: Decimal::new(rng.random_range(1..100), 2),
-            side: if rng.random_bool(0.5) { "BUY" } else { "SELL" }.to_string(),
+            side: if rng.random_bool(0.5) {
+                Side::BUY
+            } else {
+                Side::SELL
+            },
             outcome: if rng.random_bool(0.5) { "Yes" } else { "No" }.to_string(),
             order_type: "PLACEMENT".to_string(),
             timestamp: Utc::now().timestamp_millis() as u64,
