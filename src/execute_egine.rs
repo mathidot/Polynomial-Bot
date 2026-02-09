@@ -65,6 +65,7 @@ impl ExecuteEgine {
             "Signal triggered for {}: price {} >= threshold {}",
             token_id, signal_price, strategy_cfg.buy_threshold
         );
+
         let book = {
             let lock = self.global_state.lock()?;
             match lock.get_book(token_id) {
@@ -133,12 +134,10 @@ impl ExecuteEgine {
     async fn on_tick(&mut self) -> crate::Result<()> {
         while let Some(token_info) = self.token_rx.recv().await {
             match self.try_generate_order(&token_info) {
-                Ok(Some(args)) => {
-                    match self.client.create_and_post_order(&args).await {
-                        Ok(order_id) => info!("Successfully posted order. ID: {:?}", order_id),
-                        Err(e) => error!("API Error posting order: {:?}", e),
-                    }
-                }
+                Ok(Some(args)) => match self.client.create_and_post_order(&args).await {
+                    Ok(order_id) => info!("Successfully posted order. ID: {:?}", order_id),
+                    Err(e) => error!("API Error posting order: {:?}", e),
+                },
                 Ok(None) => {}
                 Err(e) => {
                     error!("Error generating order: {:?}", e);

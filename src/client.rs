@@ -845,16 +845,24 @@ impl ClobClient {
         // Owner field must reference the credential principal identifier
         // to maintain consistency with the authentication context layer
         let body = PostOrder::new(order, api_creds.api_key.clone(), order_type);
-
         let headers = create_l2_headers(signer, api_creds, "POST", "/order", Some(&body))?;
         let req = self.create_request_with_headers(Method::POST, "/order", headers.into_iter());
 
+        tracing::info!("post order req: {:?}", req);
+
         let response = req.json(&body).send().await?;
         if !response.status().is_success() {
-            return Err(PolyfillError::api(
-                response.status().as_u16(),
-                "Failed to post order",
-            ));
+            let status = response.status();
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Could not read body".to_string());
+            tracing::error!(
+                "fail to post order. Status: {}, Response Body: {}",
+                status,
+                error_body
+            );
+            return Err(PolyfillError::api(status.as_u16(), "Failed to post order"));
         }
 
         Ok(response.json::<Value>().await?)

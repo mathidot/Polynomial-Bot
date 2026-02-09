@@ -1,4 +1,5 @@
 use dotenvy::dotenv;
+use polynomial::ApiCredentials;
 use polynomial::SubscribedChannel;
 use polynomial::WebSocketStream;
 use polynomial::WssChannelType;
@@ -89,18 +90,37 @@ async fn main() -> Result<()> {
 
     // load config
     let private_key = env::var("PK").expect("PRIVATE_KEY must be set in .env file");
-
+    let api_key = env::var("api_key").expect("api_key must be set in .env file");
+    let secret = env::var("api_secret").expect("secret must be set in .env file");
+    let passphrase = env::var("api_passphrase").expect("passphrase must be set in .env file");
+    let api_credentials = ApiCredentials {
+        api_key,
+        secret,
+        passphrase,
+    };
+    tracing::info!("api credentials: {:?}", api_credentials);
+    let client = ClobClient::with_l2_headers(
+        DEFAULT_BASE_URL,
+        &private_key,
+        DEFAULT_CHAIN_ID,
+        api_credentials,
+    );
     let strategy_config = config::load_strategy_config();
-    let client = ClobClient::with_l1_headers(DEFAULT_BASE_URL, &private_key, DEFAULT_CHAIN_ID);
-    let fill_engine = FillEngine::new(dec!(10), dec!(0.5), 0);
-    let mut execute_egine =
+    let fill_engine = FillEngine::new(dec!(1.0), dec!(0.5), 0);
+    let mut execute_engine =
         ExecuteEgine::new(client, rx, strategy_config, fill_engine, global_state);
 
-    let execute_engine_handle = tokio::spawn(async move {
-        execute_egine.run().await;
-    });
-
-    let _ = tokio::try_join!(data_engine_handle, execute_engine_handle);
+    let execute_engine_handle = tokio::spawn(async move { execute_engine.run().await });
+    let _ = match tokio::try_join!(data_engine_handle, execute_engine_handle) {
+        Ok((_, exec_res)) => {
+            if let Err(e) = exec_res {
+                tracing::error!("Execute engine internal error: {}", e);
+            }
+        }
+        Err(join_err) => {
+            tracing::error!("Task panicked or was cancelled: {}", join_err);
+        }
+    };
 
     tokio::signal::ctrl_c()
         .await

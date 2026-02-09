@@ -3,8 +3,8 @@ use crate::errors::{PolyfillError, Result, StreamErrorKind};
 use crate::state::GlobalState;
 use crate::types::{
     BestBidAskMessage, BookMessage, LastTradePriceMessage, MarketResolvedMessage, NewMarketMessage,
-    OrderMessage, PriceChangeMessage, StreamMessage, TickSizeChangeMessage, TokenInfo, TradeMessage,
-    WssAuth, WssChannelType, WssSubscription,
+    OrderMessage, PriceChangeMessage, StreamMessage, TickSizeChangeMessage, TokenInfo,
+    TradeMessage, WssAuth, WssChannelType, WssSubscription,
 };
 use crate::{BookWithSequence, ClobClient, DEFAULT_BASE_URL, MarketStream, OrderDelta, TokenApi};
 use chrono::{DateTime, Datelike};
@@ -239,7 +239,7 @@ impl DataEngine {
                 };
             }
             Ok(None) => {
-                tracing::error!("get_none_price");
+                tracing::warn!("get_none_price");
             }
             Err(e) => {
                 tracing::error!("get price error: {}", e);
