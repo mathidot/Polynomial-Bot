@@ -8,8 +8,9 @@ use crate::errors::{PolyfillError, Result};
 use crate::http_config::{
     create_colocated_client, create_internet_client, create_optimized_client, prewarm_connections,
 };
+use crate::orders::SigType;
 use crate::types::{OrderOptions, PostOrder, SignedOrderRequest};
-use alloy_primitives::U256;
+use alloy_primitives::{Address, U256};
 use alloy_signer_local::PrivateKeySigner;
 use reqwest::Client;
 use reqwest::header::HeaderName;
@@ -233,6 +234,47 @@ impl ClobClient {
             .expect("Invalid private key");
 
         let order_builder = crate::orders::OrderBuilder::new(signer.clone(), None, None);
+
+        let http_client = create_optimized_client().unwrap_or_else(|_| Client::new());
+
+        // Initialize infrastructure modules
+        let dns_cache = None; // Skip DNS cache for simplicity in this constructor
+        let connection_manager = Some(std::sync::Arc::new(
+            crate::connection_manager::ConnectionManager::new(
+                http_client.clone(),
+                host.to_string(),
+            ),
+        ));
+        let buffer_pool = std::sync::Arc::new(crate::buffer_pool::BufferPool::new(512 * 1024, 10));
+
+        Self {
+            http_client,
+            base_url: host.to_string(),
+            chain_id,
+            signer: Some(signer),
+            api_creds: Some(api_creds),
+            order_builder: Some(order_builder),
+            dns_cache,
+            connection_manager,
+            buffer_pool,
+        }
+    }
+
+    /// Create a client with L2 headers (for API key authentication)
+    pub fn with_l2_proxy(
+        host: &str,
+        private_key: &str,
+        chain_id: u64,
+        api_creds: ApiCreds,
+        sig_type: SigType,
+        funder: Address,
+    ) -> Self {
+        let signer = private_key
+            .parse::<PrivateKeySigner>()
+            .expect("Invalid private key");
+
+        let order_builder =
+            crate::orders::OrderBuilder::new(signer.clone(), Some(sig_type), Some(funder));
 
         let http_client = create_optimized_client().unwrap_or_else(|_| Client::new());
 
