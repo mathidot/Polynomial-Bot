@@ -1,3 +1,4 @@
+use alloy_primitives::Address;
 use dotenvy::dotenv;
 use polynomial::ApiCredentials;
 use polynomial::SubscribedChannel;
@@ -98,13 +99,20 @@ async fn main() -> Result<()> {
         secret,
         passphrase,
     };
-    tracing::info!("api credentials: {:?}", api_credentials);
-    let client = ClobClient::with_l2_headers(
+    let funder: Address = env::var("funder")
+        .expect("funder address must be set in .env file")
+        .parse()
+        .expect("funder address in .env is not a valid ethereum address");
+
+    let client = ClobClient::with_l2_proxy(
         DEFAULT_BASE_URL,
         &private_key,
         DEFAULT_CHAIN_ID,
         api_credentials,
+        polynomial::orders::SigType::PolyProxy,
+        funder,
     );
+
     let strategy_config = config::load_strategy_config();
     let fill_engine = FillEngine::new(dec!(1.0), dec!(0.5), 0);
     let mut execute_engine =
