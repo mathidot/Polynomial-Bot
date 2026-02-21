@@ -15,7 +15,7 @@ pub struct ExecuteEgine {
     token_rx: mpsc::UnboundedReceiver<TokenInfo>,
     config: StrategyConfig,
     fill_egine: FillEngine,
-    global_state: Arc<std::sync::Mutex<GlobalState>>,
+    global_state: Arc<GlobalState>,
 }
 
 impl ExecuteEgine {
@@ -24,7 +24,7 @@ impl ExecuteEgine {
         rx: mpsc::UnboundedReceiver<TokenInfo>,
         cfg: StrategyConfig,
         fill: FillEngine,
-        state: Arc<std::sync::Mutex<GlobalState>>,
+        state: Arc<GlobalState>,
     ) -> Self {
         Self {
             client,
@@ -66,8 +66,7 @@ impl ExecuteEgine {
         );
 
         let book = {
-            let lock = self.global_state.lock()?;
-            match lock.get_book(token_id) {
+            match self.global_state.get_book(token_id) {
                 Ok(book) => book.clone(),
                 Err(_) => {
                     warn!("Order book not found for token: {}", token_id);
@@ -132,9 +131,24 @@ impl ExecuteEgine {
 
     async fn on_tick(&mut self) -> crate::Result<()> {
         while let Some(token_info) = self.token_rx.recv().await {
+            match self.global_state.is_hold(&(token_info.token_id)) {
+                Ok(is_exist) => {
+                    if is_exist {
+                        tracing::info!("token: {:?} has held", token_info.token_id);
+                        continue;
+                    }
+                }
+                Err(_) => {
+                    tracing::error!("fail to get Rwlock of hold tokens");
+                    continue;
+                }
+            }
             match self.try_generate_order(&token_info) {
                 Ok(Some(args)) => match self.client.create_and_post_order(&args).await {
-                    Ok(order_id) => info!("Successfully posted order. ID: {:?}", order_id),
+                    Ok(order_id) => {
+                        info!("Successfully posted order. ID: {:?}", order_id);
+                        self.global_state.hold(&(token_info.token_id))?;
+                    }
                     Err(e) => error!("API Error posting order: {:?}", e),
                 },
                 Ok(None) => {}

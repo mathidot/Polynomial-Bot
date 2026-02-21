@@ -110,14 +110,14 @@ pub struct DataEngine {
     token_tx: Arc<Mutex<mpsc::UnboundedSender<TokenResponse>>>,
     token_rx: Arc<Mutex<mpsc::UnboundedReceiver<TokenResponse>>>,
     subscribe_provider: DashMap<WssChannelType, Arc<StreamProvider>>,
-    global_state: Arc<std::sync::Mutex<GlobalState>>,
+    global_state: Arc<GlobalState>,
     token_info_tx: mpsc::UnboundedSender<TokenInfo>,
     sequence: AtomicU64,
 }
 
 impl DataEngine {
     pub async fn new(
-        state: Arc<std::sync::Mutex<GlobalState>>,
+        state: Arc<GlobalState>,
         token_info_tx: mpsc::UnboundedSender<TokenInfo>,
         channels: Vec<SubscribedChannel>,
     ) -> Self {
@@ -225,8 +225,7 @@ impl DataEngine {
     }
 
     fn update_price(&self, token_id: String) -> Result<()> {
-        let lock = self.global_state.lock()?;
-        match lock.get_price(&token_id) {
+        match self.global_state.get_price(&token_id) {
             Ok(Some(price)) => {
                 let token_info = TokenInfo {
                     token_id: token_id.to_string(),
@@ -261,8 +260,7 @@ impl DataEngine {
         self.sequence
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         {
-            let lock = self.global_state.lock()?;
-            lock.update_order_book(book_with_sequence)?;
+            self.global_state.update_order_book(book_with_sequence)?;
         }
         self.update_price(token_id)?;
         Ok(())
@@ -273,7 +271,6 @@ impl DataEngine {
         for change in price_changes.price_changes {
             let token_id = change.asset_id.clone();
             {
-                let lock = self.global_state.lock()?;
                 let delta = OrderDelta {
                     token_id: change.asset_id,
                     timestamp: DateTime::from_timestamp_millis(price_changes.timestamp as i64)
@@ -285,7 +282,7 @@ impl DataEngine {
                 };
                 self.sequence
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                lock.apply_delta(delta)?;
+                self.global_state.apply_delta(delta)?;
             }
             self.update_price(token_id)?;
         }
@@ -296,16 +293,12 @@ impl DataEngine {
         tracing::debug!("on tick size change: {:?}", msg);
         let token_id = msg.asset_id.clone();
 
-        let mut book = {
-            let lock = self.global_state.lock()?;
-            lock.get_book(&token_id)?
-        };
+        let mut book = { self.global_state.get_book(&token_id)? };
 
         book.set_tick_size(msg.new_tick_size)?;
 
         {
-            let lock = self.global_state.lock()?;
-            lock.insert_order_book(book)?;
+            self.global_state.insert_order_book(book)?;
         }
         Ok(())
     }
@@ -319,9 +312,10 @@ impl DataEngine {
         tracing::debug!("on best bid ask: {:?}", msg);
         let token_id = msg.asset_id.clone();
         {
-            let lock = self.global_state.lock()?;
-            lock.update_ask_price(token_id.clone(), msg.best_ask);
-            lock.update_bid_price(token_id.clone(), msg.best_bid);
+            self.global_state
+                .update_ask_price(token_id.clone(), msg.best_ask);
+            self.global_state
+                .update_bid_price(token_id.clone(), msg.best_bid);
         }
         Ok(())
     }

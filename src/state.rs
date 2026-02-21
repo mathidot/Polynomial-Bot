@@ -1,9 +1,12 @@
 use crate::book::OrderBook;
 use crate::{BookSnapshot, BookWithSequence, OrderBookManager, OrderDelta};
-use crate::Result;
+use crate::{PolyfillClient, PolyfillError, Result};
+use alloy_sol_types::abi::token;
 use dashmap::DashMap;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
+use std::collections::HashSet;
+use std::sync::RwLock;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -15,7 +18,8 @@ pub struct PriceInfo {
 }
 pub struct GlobalState {
     tokens: DashMap<String, PriceInfo>,
-    book_manager: Arc<OrderBookManager>, // Removed RwLock as OrderBookManager is now thread-safe internally
+    book_manager: Arc<OrderBookManager>,
+    hold_tokens: Arc<RwLock<HashSet<String>>>,
 }
 
 impl GlobalState {
@@ -23,6 +27,7 @@ impl GlobalState {
         Self {
             tokens: DashMap::new(),
             book_manager: Arc::new(OrderBookManager::new(100)),
+            hold_tokens: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -83,6 +88,31 @@ impl GlobalState {
 
     pub fn apply_delta(&self, delta: OrderDelta) -> Result<()> {
         self.book_manager.apply_delta(delta)?;
+        Ok(())
+    }
+
+    pub fn is_hold(&self, token_id: &str) -> Result<bool> {
+        let hold_tokens = self
+            .hold_tokens
+            .try_read()
+            .map_err(|_| PolyfillError::Internal {
+                message: "fail to unlock Rwlock".to_string(),
+                source: None,
+            })?;
+
+        Ok(hold_tokens.contains(token_id))
+    }
+
+    pub fn hold(&self, token_id: &str) -> Result<()> {
+        let mut hold_tokens =
+            self.hold_tokens
+                .try_write()
+                .map_err(|_| PolyfillError::Internal {
+                    message: "fail to unlock Rwlock".to_string(),
+                    source: None,
+                })?;
+
+        hold_tokens.insert(token_id.to_string());
         Ok(())
     }
 }

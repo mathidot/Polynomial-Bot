@@ -1,7 +1,5 @@
 use alloy_primitives::Address;
 use dotenvy::dotenv;
-use hickory_resolver::proto::rr::rdata::opt::ClientSubnet;
-use polynomial::ApiCredentials;
 use polynomial::BalanceAllowanceParams;
 use polynomial::PolyfillError;
 use polynomial::SubscribedChannel;
@@ -52,7 +50,7 @@ async fn main() -> Result<()> {
     tracing::info!("🚀 Starting Polynomial Trading System...");
 
     let engine_config = config::load_engine_config();
-    let global_state = Arc::new(std::sync::Mutex::new(GlobalState::new()));
+    let global_state = Arc::new(GlobalState::new());
     let (tx, rx) = mpsc::unbounded_channel();
     let mut subscribed_channels = Vec::new();
 
