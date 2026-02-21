@@ -4,7 +4,7 @@ use crate::state::GlobalState;
 use crate::types::{
     BestBidAskMessage, BookMessage, LastTradePriceMessage, MarketResolvedMessage, NewMarketMessage,
     OrderMessage, PriceChangeMessage, StreamMessage, TickSizeChangeMessage, TokenInfo,
-    TradeMessage, WssAuth, WssChannelType, WssSubscription,
+    TradeMessage, WssChannelType, WssSubscription,
 };
 use crate::{BookWithSequence, ClobClient, DEFAULT_BASE_URL, MarketStream, OrderDelta, TokenApi};
 use chrono::{DateTime, Datelike};
@@ -261,7 +261,7 @@ impl DataEngine {
         self.sequence
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         {
-            let mut lock = self.global_state.lock()?;
+            let lock = self.global_state.lock()?;
             lock.update_order_book(book_with_sequence)?;
         }
         self.update_price(token_id)?;
@@ -273,7 +273,7 @@ impl DataEngine {
         for change in price_changes.price_changes {
             let token_id = change.asset_id.clone();
             {
-                let mut lock = self.global_state.lock()?;
+                let lock = self.global_state.lock()?;
                 let delta = OrderDelta {
                     token_id: change.asset_id,
                     timestamp: DateTime::from_timestamp_millis(price_changes.timestamp as i64)

@@ -20,7 +20,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{Sleep, sleep};
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// Trait for market data streams
 #[async_trait]
@@ -563,7 +563,7 @@ impl Sink<Value> for WebSocketStream {
 
 #[async_trait]
 impl MarketStream for WebSocketStream {
-    fn subscribe(&mut self, subscription: Subscription) -> Result<()> {
+    fn subscribe(&mut self, _subscription: Subscription) -> Result<()> {
         // Convert Subscription (old type?) to WssSubscription if possible, or just use subscribe_async logic
         // The trait uses `Subscription` but the implementation uses `WssSubscription`
         // Looking at `types.rs`, `Subscription` might be an alias or different struct.

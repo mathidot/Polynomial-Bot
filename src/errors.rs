@@ -6,7 +6,6 @@
 
 use std::{sync::PoisonError, time::Duration};
 use thiserror::Error;
-use url::Position;
 
 /// Main error type for the Polymarket client
 #[derive(Error, Debug)]
@@ -447,7 +446,7 @@ impl Clone for PolyfillError {
                 message: message.clone(),
                 source: None,
             },
-            PolyfillError::Http { message, source } => PolyfillError::Http {
+            PolyfillError::Http { message, source: _ } => PolyfillError::Http {
                 message: message.clone(),
                 source: None,
             },

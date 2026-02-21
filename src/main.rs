@@ -1,21 +1,29 @@
 use alloy_primitives::Address;
 use dotenvy::dotenv;
+use hickory_resolver::proto::rr::rdata::opt::ClientSubnet;
 use polynomial::ApiCredentials;
+use polynomial::BalanceAllowanceParams;
+use polynomial::PolyfillError;
 use polynomial::SubscribedChannel;
 use polynomial::WebSocketStream;
 use polynomial::WssChannelType;
 use polynomial::config::EngineMode;
 use polynomial::errors::Result;
 use polynomial::stream::MockStream;
+use polynomial::types::ApiCreds;
 use polynomial::{ClobClient, DataEngine, FillEngine, config};
 use polynomial::{
     DEFAULT_BASE_URL, DEFAULT_CHAIN_ID, DEFAULT_WEBSOCKET_MARKET_URL, DEFAULT_WEBSOCKET_USER_URL,
     GlobalState, execute_egine::ExecuteEgine,
 };
 use rust_decimal_macros::dec;
+use std::default;
 use std::env;
+use std::ops::Add;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::client;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -92,26 +100,34 @@ async fn main() -> Result<()> {
     // load config
     let private_key = env::var("PK").expect("PRIVATE_KEY must be set in .env file");
     let api_key = env::var("api_key").expect("api_key must be set in .env file");
-    let secret = env::var("api_secret").expect("secret must be set in .env file");
-    let passphrase = env::var("api_passphrase").expect("passphrase must be set in .env file");
-    let api_credentials = ApiCredentials {
+    let secret = env::var("secret").expect("secret must be set in .env file");
+    let passphrase = env::var("passphrase").expect("passphrase must be set in .env file");
+    let funder_str = env::var("funder").expect("funder must be set in .env file");
+    let funder = Address::from_str(&funder_str).map_err(|e| PolyfillError::Parse {
+        message: format!("format of founder address is wrong: {}", e),
+        source: None,
+    })?;
+    let api_creds = ApiCreds {
         api_key,
         secret,
         passphrase,
     };
-    let funder: Address = env::var("funder")
-        .expect("funder address must be set in .env file")
-        .parse()
-        .expect("funder address in .env is not a valid ethereum address");
 
-    let client = ClobClient::with_l2_proxy(
+    let mut client = ClobClient::with_l2_proxy(
         DEFAULT_BASE_URL,
         &private_key,
         DEFAULT_CHAIN_ID,
-        api_credentials,
+        Some(api_creds),
         polynomial::orders::SigType::PolyProxy,
         funder,
     );
+    let api_creds = client.create_or_derive_api_key(None).await?;
+    client.set_api_creds(api_creds);
+    let mut params = BalanceAllowanceParams::default();
+    params.token_id = None;
+    params.asset_type = Some(polynomial::AssetType::COLLATERAL);
+    let allowance = client.get_balance_allowance(Some(params)).await?;
+    tracing::info!("account balance: {:?}", allowance);
 
     let strategy_config = config::load_strategy_config();
     let fill_engine = FillEngine::new(dec!(1.0), dec!(0.5), 0);
@@ -119,7 +135,7 @@ async fn main() -> Result<()> {
         ExecuteEgine::new(client, rx, strategy_config, fill_engine, global_state);
 
     let execute_engine_handle = tokio::spawn(async move { execute_engine.run().await });
-    let _ = match tokio::try_join!(data_engine_handle, execute_engine_handle) {
+    match tokio::try_join!(data_engine_handle, execute_engine_handle) {
         Ok((_, exec_res)) => {
             if let Err(e) = exec_res {
                 tracing::error!("Execute engine internal error: {}", e);

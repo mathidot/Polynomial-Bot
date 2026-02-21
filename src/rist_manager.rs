@@ -18,7 +18,7 @@ impl RistManager {
 
     pub fn get_amount(&self, token_id: &str) -> Result<Decimal> {
         let book = self.global_state.get_book(token_id)?;
-        let bids = book.bids_fast(None);
+        let _bids = book.bids_fast(None);
         Ok(self.trade_unit)
     }
 }

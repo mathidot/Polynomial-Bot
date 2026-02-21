@@ -18,13 +18,12 @@ use reqwest::{Method, RequestBuilder};
 use rust_decimal::Decimal;
 use rust_decimal::prelude::FromPrimitive;
 use serde_json::Value;
-use std::fmt::Debug;
+use std::fmt::{Debug, format};
 use std::str::FromStr;
+use tokio_tungstenite::tungstenite::handshake::headers;
 
 // Re-export types for compatibility
-use crate::common::{
-    EVENT_URL, MARKET_URL, MarketResponse, SLUG_URL, SPORT_URL, TokenResponse, TokenType,
-};
+use crate::common::{EVENT_URL, MARKET_URL, MarketResponse, SLUG_URL, SPORT_URL};
 pub use crate::types::{ApiCredentials as ApiCreds, OrderType, Side, TokenInfo};
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -265,7 +264,7 @@ impl ClobClient {
         host: &str,
         private_key: &str,
         chain_id: u64,
-        api_creds: ApiCreds,
+        api_creds: Option<ApiCreds>,
         sig_type: SigType,
         funder: Address,
     ) -> Self {
@@ -293,7 +292,7 @@ impl ClobClient {
             base_url: host.to_string(),
             chain_id,
             signer: Some(signer),
-            api_creds: Some(api_creds),
+            api_creds,
             order_builder: Some(order_builder),
             dns_cache,
             connection_manager,
@@ -890,7 +889,7 @@ impl ClobClient {
         let headers = create_l2_headers(signer, api_creds, "POST", "/order", Some(&body))?;
         let req = self.create_request_with_headers(Method::POST, "/order", headers.into_iter());
 
-        tracing::info!("post order req: {:?}", req);
+        tracing::info!("post order body: {:?}", body);
 
         let response = req.json(&body).send().await?;
         if !response.status().is_success() {
@@ -912,6 +911,7 @@ impl ClobClient {
 
     /// Create and post an order in one call
     pub async fn create_and_post_order(&self, order_args: &OrderArgs) -> Result<Value> {
+        tracing::info!("create and post order args: {:?}", order_args);
         let order = self.create_order(order_args, None, None, None).await?;
         self.post_order(order, OrderType::GTC).await
     }
@@ -1149,6 +1149,40 @@ impl ClobClient {
         }
 
         Ok(output)
+    }
+
+    /// Get balance
+    pub async fn get_balance(&self) -> Result<Value> {
+        let signer = self
+            .signer
+            .as_ref()
+            .ok_or_else(|| PolyfillError::auth("Signer not set"))?;
+        let api_creds = self
+            .api_creds
+            .as_ref()
+            .ok_or_else(|| PolyfillError::auth("API credentials not set"))?;
+
+        let method = Method::GET;
+        let endpoint = "/v2/balances";
+        let headers =
+            create_l2_headers::<Value>(signer, api_creds, method.as_str(), endpoint, None)?;
+        let response = self
+            .http_client
+            .request(method, format!("{}{}", self.base_url, endpoint))
+            .headers(
+                headers
+                    .into_iter()
+                    .map(|(k, v)| (HeaderName::from_static(k), v.parse().unwrap()))
+                    .collect(),
+            )
+            .send()
+            .await
+            .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?;
+        tracing::info!("get balance response: {:?}", response);
+        response
+            .json::<Value>()
+            .await
+            .map_err(|e| PolyfillError::parse(format!("Failed to parse response: {}", e), None))
     }
 
     /// Get balance and allowance information for all assets
@@ -1791,14 +1825,13 @@ impl TokenApi for ClobClient {
             .await
             .map_err(|e| PolyfillError::network(format!("Request failed: {}", e), e))?;
 
-        let ret = response
+        response
             .json::<Value>()
             .await
             .map_err(|e| PolyfillError::Parse {
                 message: e.to_string(),
                 source: Some(Box::new(e)),
-            });
-        ret
+            })
     }
 
     async fn get_specified_tag_ids(

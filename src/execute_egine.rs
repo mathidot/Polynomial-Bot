@@ -1,6 +1,5 @@
 use crate::OrderArgs;
 use crate::Result;
-use crate::book;
 use crate::client::ClobClient;
 use crate::config::StrategyConfig;
 use crate::fill::FillStatus;

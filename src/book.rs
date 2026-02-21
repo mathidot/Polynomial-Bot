@@ -1,13 +1,12 @@
 //! Order book management for Polymarket client
 
-use crate::errors::{OrderErrorKind, PolyfillError, Result, StreamErrorKind};
-use crate::time::now_micros;
+use crate::errors::{PolyfillError, Result};
 use crate::types::*;
 use crate::utils::math;
 use chrono::Utc;
 use rust_decimal::Decimal;
 use std::collections::BTreeMap; // BTreeMap keeps prices sorted automatically - crucial for order books
-use std::sync::{Arc, RwLock}; // For thread-safe access across multiple tasks
+use std::sync::Arc; // For thread-safe access across multiple tasks
 use tracing::{debug, trace, warn}; // Logging for debugging and monitoring
 
 /// High-performance order book implementation
